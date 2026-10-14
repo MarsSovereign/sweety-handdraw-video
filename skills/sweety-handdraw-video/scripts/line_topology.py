@@ -132,8 +132,9 @@ def turning(points, window=4):
     return np.degrees(np.arccos(np.clip(cosine, -1, 1)))
 
 
-def split_for_hand(points, corner=75., maximum=MAX_STROKE):
-    """Lift at sharp corners and re-grip on very long runs, as a hand would."""
+def split_for_hand(points, corner=120., maximum=MAX_STROKE):
+    """Lift only at hairpin corners and re-grip on very long runs; ordinary corners are drawn through
+    (the nib slows there via the curvature weighting)."""
     if len(points) < 30:
         return [points]
     angles = turning(points)

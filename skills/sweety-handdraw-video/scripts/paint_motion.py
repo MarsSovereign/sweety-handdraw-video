@@ -3,13 +3,15 @@ region's principal axis (rounded turns, no lift inside a region), then a few bro
 import math
 import numpy as np
 from scipy import ndimage
-from line_drawing import FRAME_PX, lift_seconds, weighted_lengths
+from line_drawing import lift_seconds, weighted_lengths
 
 FILL_SPEED = 700.     # px/s of marker travel for a person coloring at 1080p
 SHADE_SECONDS = .35   # per shaded part, at human pace
 SHADE_RAMP = .3       # seconds over which a broad soft stroke blends flat color into the source
 SCALES = (1., 1.5, 2., 3.)
 FILL_FACTOR = 6.      # coloring cap: a broad marker has no detail to follow, so time-lapsed coloring reads as human at 6x
+FILL_FRAME_PX = 120.  # a broad marker may sweep this far per frame: its own width keeps the swept color continuous
+SMALL_REGION = 1500   # px; in a hurry such specks get no pass of their own and settle in as their part finishes
 
 
 def inpaint_lines(pixels, line_zone):
@@ -138,9 +140,14 @@ def zigzag(region, radius):
 
 
 def plan(regions, scale):
+    hurried = scale >= SCALES[-1]
+    largest = {}
+    for region in regions:
+        largest[region['part']] = max(largest.get(region['part'], 0), region['area'])
     for region in regions:
         region['radius'] = float(np.clip(math.sqrt(region['area']) / 7, 7, 24) * scale)
-        region['cells'] = zigzag(region, region['radius'])
+        small = hurried and region['area'] < SMALL_REGION and region['area'] < largest[region['part']]
+        region['cells'] = [] if small else zigzag(region, region['radius'])
 
 
 def shaded_parts(regions, rgb, part_count):
@@ -209,7 +216,7 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
 
 
 def fill_cap(speed, fps):
-    return min(FILL_SPEED * FILL_FACTOR, FRAME_PX * fps) * speed
+    return min(FILL_SPEED * FILL_FACTOR, FILL_FRAME_PX * fps) * speed
 
 
 def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
@@ -283,6 +290,10 @@ def render(shape, regions, bands, owners):
                 cover_local[window][passing] = np.maximum(cover_local[window], coverage * grain_local[window])[passing]
                 solid = (coverage >= .85) & ~np.isfinite(full_local[window])
                 full_local[window][solid] = when
+        if not region['passes']:
+            # A speck skipped in a hurry settles in as its part finishes, under the marker's soft edge.
+            first_local[mask], cover_local[mask], full_local[mask] = region['end'], 1., region['end']
+            continue
         missing = mask & ~np.isfinite(first_local)
         if missing.any():
             _, nearest = ndimage.distance_transform_edt(~(np.isfinite(first_local) & mask), return_indices=True)
