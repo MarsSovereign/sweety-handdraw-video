@@ -20,6 +20,8 @@ MAX_CAPTION_CHARS = 24
 MIN_PAUSE_SECONDS = .08
 SYNC_TOLERANCE_SECONDS = .3
 SYNC_GAP_SECONDS = .2
+# Clause breaks in fluent narration can be 30-50 ms; shifting cues by 0.4 s still fails nearly every cue.
+SYNC_PAUSE_SECONDS = .03
 TRANSCRIBE = r'''
 import json, sys, mlx_whisper
 result = mlx_whisper.transcribe(sys.argv[1], path_or_hf_repo=sys.argv[2], language='zh', word_timestamps=True)
@@ -124,9 +126,9 @@ def pauses(samples, rate=SAMPLE_RATE, minimum=MIN_PAUSE_SECONDS):
     return found
 
 
-def onsets(samples, rate=SAMPLE_RATE):
+def onsets(samples, rate=SAMPLE_RATE, minimum=.05):
     first, _ = speech_span(samples, rate)
-    return [first] + [end for _, end in pauses(samples, rate, .05)]
+    return [first] + [end for _, end in pauses(samples, rate, minimum)]
 
 
 def pause_split(samples, weights, rate=SAMPLE_RATE):
@@ -200,7 +202,7 @@ def beat_entry(samples, beat_id, text, offset, words=None, rate=SAMPLE_RATE):
 def caption_sync(samples, cues, rate=SAMPLE_RATE, tolerance=SYNC_TOLERANCE_SECONDS):
     """A cue after a caption gap (>= SYNC_GAP_SECONDS) must start within tolerance of a speech onset (pause
     end); a cue continuing fluent speech, where energy shows no word boundary, must start where speech is."""
-    found, active = np.array(onsets(samples, rate)), activity(samples, rate)
+    found, active = np.array(onsets(samples, rate, SYNC_PAUSE_SECONDS)), activity(samples, rate)
     offsets, outside, previous_end = [], [], None
     for cue in cues:
         offset = float(np.min(np.abs(found - cue['start'])))

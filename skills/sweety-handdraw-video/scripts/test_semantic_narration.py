@@ -71,6 +71,21 @@ class SemanticNarrationTests(unittest.TestCase):
                 build_master(directory, manifest([['一句完整的旁白。']]), lambda text, seed: fake_tts(text, seed, broken={2026, 2027, 2028}),
                              {'engine': 'fixture'}, {'asr': False})
 
+    def test_caption_sync_finds_a_short_clause_break_in_fluent_speech(self):
+        from scipy import signal
+        from test_audio_gate import BAND
+        rng = np.random.default_rng(0)
+        parts = []
+        for speech, pause in [(.3, .4), (1.5, .04), (1.5, .5)]:
+            time = np.arange(round(speech * SAMPLE_RATE)) / SAMPLE_RATE
+            parts += [signal.sosfilt(BAND, rng.standard_normal(len(time))) * (.6 + .4 * np.sin(np.pi * 4 * time) ** 2), np.zeros(round(pause * SAMPLE_RATE))]
+        samples = np.concatenate(parts)
+        samples = .5 * samples / np.abs(samples).max() + 10 ** (-70 / 20) * rng.standard_normal(len(samples))
+        cues = [{'text': '前半句，', 'start': .7, 'end': 2.}, {'text': '后半句。', 'start': 2.24, 'end': 3.74}]
+        self.assertEqual(caption_sync(samples, cues)['status'], 'PASS')
+        for shift in (.5, -.5):
+            self.assertEqual(caption_sync(samples, [{**cue, 'start': cue['start'] + shift, 'end': cue['end'] + shift} for cue in cues])['status'], 'FAIL')
+
     def test_engine_timestamps_and_pause_split_place_cues(self):
         samples = speech_like([(1.2, .4), (2., .4), (1., .3)])
         ranges, method = pause_split(samples, [6, 10, 5])
