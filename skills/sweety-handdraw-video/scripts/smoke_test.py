@@ -9,6 +9,9 @@ import sys
 import wave
 import numpy as np
 from PIL import Image, ImageDraw
+from fonts import select
+
+RARE = '犇羴鱻龘囧槑'
 
 
 def write_test_tone(path, seconds, frequency):
@@ -46,6 +49,10 @@ def main():
     ink = Image.new('RGBA', (100, 60))
     ImageDraw.Draw(ink).line((8, 45, 50, 10, 90, 45), fill='#202020', width=3)
     ink.save(inputs / 'ink-only.png')
+    try:  # rare glyphs join the fixture wherever an installed font covers them; the failure path is unit-tested
+        rare = RARE if select('handwriting', RARE) and select('caption', RARE) else ''
+    except (ValueError, FileNotFoundError):
+        rare = ''
     durations = [3.6, 4.4, 3.2]
     for index, duration in enumerate(durations):
         write_test_tone(inputs / f'beat-{index}.wav', duration, 220 + 55 * index)
@@ -61,8 +68,8 @@ def main():
                 {'type': 'illustration', 'parts': [{'id': 'object', 'polygon': [[0,0],[1,0],[1,1],[0,1]]}], 'source': 'inputs/tiny-color.png', 'outline_mask':'inputs/tiny-outline.png', 'x': 580, 'y': 170, 'width': 7, 'height': 7},
                 {'type': 'illustration', 'parts': [{'id': 'object', 'polygon': [[0,0],[1,0],[1,1],[0,1]]}], 'source': 'inputs/ink-only.png', 'x': 650, 'y': 190, 'width': 100, 'height': 60},
                 {'type': 'marker', 'style': 'circle', 'x': 540, 'y': 110, 'width': 300, 'height': 220, 'weight': .4}]}]},
-            {'beats': [{'id': 'c', 'text': '换页后，时间由实际音频决定。', 'audio': 'inputs/beat-2.wav', 'actions': [
-                {'type': 'text', 'text': '第二页', 'x': 140, 'y': 120, 'size': 50},
+            {'beats': [{'id': 'c', 'text': '换页后，时间由实际音频决定。' + rare, 'audio': 'inputs/beat-2.wav', 'actions': [
+                {'type': 'text', 'text': '第二页' + rare, 'x': 140, 'y': 120, 'size': 50},
                 {'type': 'marker', 'style': 'underline', 'x': 140, 'y': 190, 'width': 360, 'height': 20, 'weight': .3}]}]}]}
     (root / 'job.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
     command = [sys.executable, '-B', str(Path(__file__).with_name('handdraw_video.py'))]
@@ -85,7 +92,9 @@ def main():
     (root / 'job.json').write_text(original)
     if stale.returncode == 0 or 'Manifest changed' not in stale.stderr:
         raise AssertionError('A stale manifest was incorrectly accepted')
-    report = {'status': 'offline_runtime_checks_passed', 'fixture_only': True, 'visual_acceptance_claimed': False,
+    if rare and rare not in timeline['cues'][-1]['text']:
+        raise AssertionError('Rare characters were dropped from the captions')
+    report = {'status': 'offline_runtime_checks_passed', 'fixture_only': True, 'visual_acceptance_claimed': False, 'rare_glyphs': rare,
         'checks': ['variable pages and beat counts', 'actual-audio timing', '960x540 at 24fps',
                    'Chinese stroke tips and punctuation', 'tiny isolated color patch', 'ink-only artwork',
                    'full H264/AAC decode', 'runtime fixtures cannot be delivered', 'changed manifest blocks old verification']}
