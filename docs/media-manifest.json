@@ -1,65 +1,56 @@
 {
-  "version": "1.2",
+  "note": "README stills and animated previews are committed here and linked relatively; full 1080p films stay as GitHub Release downloads.",
   "files": {
     "docs/media/hand-presets.jpg": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--hand-presets.jpg",
       "bytes": 139660,
-      "sha256": "d1fb55fe01c4b0e54a0bab0f32012773f372a9d41c4c3a039a37422510b2eab0",
-      "release_asset": "docs--media--hand-presets.jpg"
+      "sha256": "d1fb55fe01c4b0e54a0bab0f32012773f372a9d41c4c3a039a37422510b2eab0"
     },
     "docs/media/murphy-cover.jpg": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--murphy-cover.jpg",
       "bytes": 155977,
-      "sha256": "63af326f55da1308ed922c580d70e5b290ee8fbd2cbddf24b92a14d23910a2c9",
-      "release_asset": "docs--media--murphy-cover.jpg"
-    },
-    "docs/media/murphy-drawing.gif": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--murphy-drawing.gif",
-      "bytes": 997469,
-      "sha256": "07b9dc92d0acec0bbca4036b575da5364b59e28529f528dfc63480f8854e9f3f",
-      "release_asset": "docs--media--murphy-drawing.gif"
-    },
-    "docs/media/murphy-final.jpg": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--murphy-final.jpg",
-      "bytes": 113103,
-      "sha256": "f40be262de7b5da5ac7682df3eca352df93dc66a5f6cd5e5338d267564d016bf",
-      "release_asset": "docs--media--murphy-final.jpg"
+      "sha256": "63af326f55da1308ed922c580d70e5b290ee8fbd2cbddf24b92a14d23910a2c9"
     },
     "docs/media/snake-cover.jpg": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--snake-cover.jpg",
       "bytes": 17442,
-      "sha256": "aebf93b8f0255cf1bf40b96bbb3fa1cc3ab88e3aa554120fa1217d9c9840635d",
-      "release_asset": "docs--media--snake-cover.jpg"
+      "sha256": "aebf93b8f0255cf1bf40b96bbb3fa1cc3ab88e3aa554120fa1217d9c9840635d"
     },
-    "docs/media/snake-drawing.gif": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--snake-drawing.gif",
-      "bytes": 861233,
-      "sha256": "e12888476f3fa182383ca10764951211b5c8e49588d247524dfa19e3a34d9aaf",
-      "release_asset": "docs--media--snake-drawing.gif"
-    },
-    "docs/media/snake-story.mp4": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--snake-story.mp4",
-      "bytes": 7702967,
-      "sha256": "8cf10dbc14e69e14625a432ce4521b6c9cf1d1809a608f8fcc0768475a662ce8",
-      "release_asset": "docs--media--snake-story.mp4"
+    "docs/media/snake-drawing.webp": {
+      "bytes": 565280,
+      "sha256": "53820453de4a540271e1ca890d668d15868d192f74c5583945503828c5ee5b00",
+      "derived_from": {
+        "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--snake-drawing.gif",
+        "sha256": "e12888476f3fa182383ca10764951211b5c8e49588d247524dfa19e3a34d9aaf",
+        "conversion": "GIF to animated WebP, Pillow quality 80, same frames and timing"
+      }
     },
     "docs/media/wolf-cover.jpg": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--wolf-cover.jpg",
       "bytes": 22311,
-      "sha256": "fcedefa31732b5aa354f23dfd973a2bda17f1d78ef7132d01c0f8b56c740fd04",
-      "release_asset": "docs--media--wolf-cover.jpg"
+      "sha256": "fcedefa31732b5aa354f23dfd973a2bda17f1d78ef7132d01c0f8b56c740fd04"
     },
-    "docs/media/wolf-drawing.gif": {
-      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--wolf-drawing.gif",
-      "bytes": 333500,
-      "sha256": "3ef61de3d45be742d52f7bed0de62cc275c38bf04fbf8db2c6fe3b6b97d84aa9",
-      "release_asset": "docs--media--wolf-drawing.gif"
+    "docs/media/wolf-drawing.webp": {
+      "bytes": 183566,
+      "sha256": "c250ec363ff502035cd96de7dab42626aa6c74c56b2f5c15fcb994313ba61d48",
+      "derived_from": {
+        "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--wolf-drawing.gif",
+        "sha256": "3ef61de3d45be742d52f7bed0de62cc275c38bf04fbf8db2c6fe3b6b97d84aa9",
+        "conversion": "GIF to animated WebP, Pillow quality 80, same frames and timing"
+      }
+    }
+  },
+  "films": {
+    "snake-story.mp4": {
+      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--snake-story.mp4",
+      "bytes": 7702967,
+      "sha256": "8cf10dbc14e69e14625a432ce4521b6c9cf1d1809a608f8fcc0768475a662ce8"
     },
-    "docs/media/wolf-story.mp4": {
+    "wolf-story.mp4": {
       "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/docs--media--wolf-story.mp4",
       "bytes": 15436981,
-      "sha256": "fbfea3f01676eb1f1b617f301689236afee9ec7dffaed8a1b52d336a72b6d902",
-      "release_asset": "docs--media--wolf-story.mp4"
+      "sha256": "fbfea3f01676eb1f1b617f301689236afee9ec7dffaed8a1b52d336a72b6d902"
+    },
+    "murphy-law.mp4": {
+      "url": "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.0.0/murphy-law.mp4",
+      "bytes": 14448441,
+      "sha256": "9b688937b94c801fb47d86cddd4301ba45899556c90042a051b5f5e3d474a477"
     }
   }
 }
