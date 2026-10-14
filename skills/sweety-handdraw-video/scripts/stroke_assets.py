@@ -240,6 +240,10 @@ def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_
     pixels=np.array(artwork)
     maximum=pixels[:,:,:3].max(axis=2)
     alpha=pixels[:,:,3]
+    # Faint isolated paper grain left by the white key is not drawable content.
+    labels, count = ndimage.label(alpha > 0, structure=np.ones((3, 3)))
+    noise = (np.bincount(labels.ravel()) < 20) & (np.r_[255, ndimage.maximum(alpha, labels, np.arange(1, count + 1))] < 64)
+    alpha[noise[labels]] = 0
     red,green,blue=[pixels[:,:,channel].astype(float) for channel in range(3)]
     cool_ink=(blue>=red+4)&(blue>=green-4)&(red<218)
     dark=((maximum<125)|cool_ink)&(alpha>30)
