@@ -218,6 +218,10 @@ def verify_job(job_directory, assets_only=False):
         require(tail_correlation > .98, 'Encoding changed or cut the final spoken phrase')
         report['ending_review'] = {**tail,'final_phrase_encoding_correlation':tail_correlation}
     report['audio_track_correlation'] = audio_correlation
+    report.update(verify_film_audio(work, timeline, video, report['audio_mix']))
+    if 'FAIL' in (report['audio_gate']['status'], report['caption_sync']['status']) and not json.loads((root/'job.json').read_text()).get('runtime_fixture'):
+        (work / 'verification.json').write_text(json.dumps({**report, 'status': 'audio_failed'}, ensure_ascii=False, indent=2))
+        require(False, 'Film audio failed: ' + json.dumps({'gate': report['audio_gate'].get('failures'), 'late_captions': report['caption_sync'].get('outside_tolerance')}, ensure_ascii=False))
     report['loudness'] = json.loads(match.group())
     require(-20 < float(report['loudness']['input_i']) < -14, 'Loudness outside expected narration range')
     require(float(report['loudness']['input_tp']) < -1, 'True peak too high')
@@ -236,7 +240,7 @@ def verify_job(job_directory, assets_only=False):
     report.update(status='engineering_passed_review_required', video_sha256=file_hash(video), cover_sha256=file_hash(output / 'cover.png'),
                   build_fingerprint=render_record['build_fingerprint'], frames=video_stream.get('nb_frames'), bytes=int(metadata['format']['size']))
     report['checks'] = {'full_decode': True, 'complete_timeline': True, 'paths_and_paint_coverage': True,
-                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'semantic_part_order':True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
+                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'audio_gate': report['audio_gate']['status'], 'caption_sync': report['caption_sync']['status'], 'semantic_part_order':True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
     (work / 'verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
     review_path = root / 'review.json'
     if not review_path.exists():
@@ -247,6 +251,18 @@ def verify_job(job_directory, assets_only=False):
     return report
 
 
+def verify_film_audio(work, timeline, video, audio_mix):
+    """Noise gate on the delivered narration (the film track, or the narration stem when music was requested)
+    and caption sync: cues start within align.SYNC_TOLERANCE_SECONDS of measured speech onsets."""
+    from audio_gate import measure, decode
+    from align import caption_sync
+    film = decode(video)
+    narration_only = not audio_mix['layers']
+    return {'audio_gate': measure(film if narration_only else decode(work/'normalized-narration.wav'),
+                                  'outputs/film.mp4 audio' if narration_only else 'work/normalized-narration.wav'),
+            'caption_sync': caption_sync(film, timeline['cues'])}
+
+
 def finalize_job(job_directory):
     root = Path(job_directory).resolve()
     report = json.loads((root / 'work' / 'verification.json').read_text())
@@ -254,6 +270,8 @@ def finalize_job(job_directory):
     video_hash = file_hash(root / 'outputs' / 'film.mp4')
     require(not json.loads((root/'job.json').read_text()).get('runtime_fixture'), 'Runtime fixtures can never be delivered as finished films')
     require(report['status'] == 'engineering_passed_review_required', 'Engineering checks must pass first')
+    require(report.get('audio_gate', {}).get('status') == 'PASS' and report.get('caption_sync', {}).get('status') == 'PASS',
+            'Film audio gate and caption sync must pass; verify again with this version')
     require(report['video_sha256'] == review['video_sha256'] == video_hash, 'Review belongs to a different video')
     timeline = json.loads((root / 'work' / 'timeline.json').read_text())
     require(timeline['manifest_sha256'] == file_hash(root / 'job.json'), 'Manifest changed since build')
