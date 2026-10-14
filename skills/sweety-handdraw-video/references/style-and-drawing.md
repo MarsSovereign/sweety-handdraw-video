@@ -80,7 +80,7 @@ python3 scripts/drawing_contract.py JOB JOB/design/drawing-plan.json
 - 连续、干净、粗细稳定的墨线轮廓；不要排线、交叉阴影、布纹/毛发/树皮纹理线和边缘检测感的碎线。
 - 部位交界处把轮廓闭合（叶基、衣摆、袖口、领口画出完整分界线），区域才能分开编号。
 - 平涂色块加柔和明暗；明暗不要用线条表达。
-- 控制线条数量：一幅约30—60笔、线长约5000—7000px时，全部描线加上色约需20—25秒（`minimum_seconds`）；口播窗口更短就简化画面或用 `visual_groups` 跨句延长窗口，不要指望淡入代替描线。
+- 控制线条数量：按约每秒3.5笔估算，45—50笔、线长约6000px 的单一主体全部描线加上色最短约11—13秒（`minimum_seconds`）；口播窗口更短就简化画面或用 `visual_groups` 跨句延长窗口，不要指望淡入代替描线。
 
 `job.json` 指定 `drawing_plan` 和 `drawing_review`。使用 `outline_mask` 时，审核中还须 `outline_mask_sha256`，且遮罩尺寸必须与裁切前的完整原图一致。后者结构：
 
