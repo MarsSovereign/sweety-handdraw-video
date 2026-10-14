@@ -1,6 +1,7 @@
 """Require drawable art plans before generation and bind semantic reviews to inputs."""
 import argparse
 import json
+import math
 from pathlib import Path
 import numpy as np
 from style_choice import digest, verify_style
@@ -65,6 +66,23 @@ def validate_narrative_requirements(plan, review, narration):
     return len(requirements)
 
 
+def validate_identity(plan, job):
+    """Storyboarded jobs: every subject names what makes it recognizable at thumbnail size; cited references exist."""
+    for subject in plan.get('subjects', []):
+        cues = subject.get('identity_cues')
+        if not isinstance(cues, list) or not cues or not all(isinstance(cue, str) and cue.strip() for cue in cues):
+            raise ValueError(f'{plan.get("id")}/{subject.get("id")}: list identity_cues that make it nameable at thumbnail size '
+                             '(e.g. grapes: the cluster and a vine leaf, not one magnified berry)')
+    if not all((Path(job) / path).is_file() for path in plan.get('references', [])):
+        raise ValueError(f'{plan.get("id")}: a cited reference image is missing')
+    return True
+
+
+def storyboarded(job):
+    path = Path(job) / 'job.json'
+    return path.is_file() and bool(json.loads(path.read_text()).get('storyboard'))
+
+
 def preflight(job, plan_path):
     job, plan_path = Path(job).resolve(), Path(plan_path).resolve()
     style = verify_style(job)
@@ -74,6 +92,8 @@ def preflight(job, plan_path):
         raise ValueError('Drawing plans need unique illustration ids')
     for plan in plans:
         validate_plan(plan)
+        if storyboarded(job):
+            validate_identity(plan, job)
         requirements = plan.get('narrative_requirements', [])
         if not requirements or any(not all(item.get(key) for key in ('id','narration_quote','observable')) for item in requirements):
             raise ValueError('Define quoted narration and observable narrative requirements before generating the illustration')
@@ -118,7 +138,7 @@ def verify_drawing_plans(job, manifest, style):
             raise ValueError('Illustration has no pre-generation drawing plan')
         plan, review = plans[identity], inspected.get(identity, {})
         expected = [part['id'] for part in plan['parts']]
-        actual = [part['id'] for part in action.get('parts', [])]
+        actual = [part['id'] for part in action.get('part_regions') or action.get('parts', [])]
         if expected != actual:
             raise ValueError('Actual part masks must match the planned outline/fill order')
         source = Path(action['source'])
@@ -129,6 +149,12 @@ def verify_drawing_plans(job, manifest, style):
             if not review.get(field):
                 raise ValueError('Actual-image drawing review needs evidence for ' + field)
         validate_narrative_requirements(plan, review, narration)
+        if manifest.get('storyboard'):
+            validate_identity(plan, job)
+            test = review.get('recognizability', {})
+            if test.get('status') != 'pass' or not str(test.get('named_as', '')).strip() or not str(test.get('evidence', '')).strip():
+                raise ValueError(f'{identity}: thumbnail recognizability test is missing or failed; redraw around its identity_cues, '
+                                 'then record status/named_as/evidence (drawing_contract.py JOB --thumbnails)')
         if plan['outline_strategy'] == 'explicit_mask' and not action.get('outline_mask'):
             raise ValueError('This style needs its planned aligned outline mask')
         if action.get('outline_mask'):
@@ -160,9 +186,37 @@ def validate_strokes(metadata):
     return True
 
 
+def thumbnails(job, size=160):
+    """Numbered caption-free thumbnails for the 1-second naming test; names stay out of the sheet."""
+    from PIL import Image, ImageDraw
+    job = Path(job).resolve()
+    actions = list(illustration_actions(json.loads((job / 'job.json').read_text())))
+    if not actions:
+        raise ValueError('No illustrations to test')
+    sheet = Image.new('RGB', (min(len(actions), 6) * (size + 24), math.ceil(len(actions) / 6) * (size + 44)), 'white')
+    for index, action in enumerate(actions):
+        with Image.open(job / action['source']) as source:
+            image = source.convert('RGBA').crop(tuple(action['crop'])) if action.get('crop') else source.convert('RGBA')
+        image.thumbnail((size, size))
+        left, top = index % 6 * (size + 24) + 12, index // 6 * (size + 44) + 32
+        sheet.paste(image, (left, top), image)
+        ImageDraw.Draw(sheet).text((left, top - 24), str(index + 1), fill='#202020')
+    path = job / 'work/review/recognizability.png'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path)
+    return {'sheet': str(path), 'size_px': size, 'cells': [{'number': index + 1, 'drawing_plan_id': action.get('drawing_plan_id'),
+            'visual': action.get('visual')} for index, action in enumerate(actions)]}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('job', type=Path)
-    parser.add_argument('plan', type=Path)
+    parser.add_argument('plan', type=Path, nargs='?')
+    parser.add_argument('--thumbnails', action='store_true', help='Write a numbered caption-free thumbnail sheet for the recognizability test')
     arguments = parser.parse_args()
-    print(json.dumps(preflight(arguments.job, arguments.plan), ensure_ascii=False))
+    if arguments.thumbnails:
+        print(json.dumps(thumbnails(arguments.job), ensure_ascii=False, indent=1))
+    elif arguments.plan:
+        print(json.dumps(preflight(arguments.job, arguments.plan), ensure_ascii=False))
+    else:
+        parser.error('Give a drawing plan to preflight or --thumbnails')

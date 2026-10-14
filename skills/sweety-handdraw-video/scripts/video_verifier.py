@@ -7,6 +7,7 @@ import re
 import subprocess
 import numpy as np
 from PIL import Image
+from motion_profile import distance_fraction
 
 
 def file_hash(path):
@@ -32,7 +33,7 @@ def build_fingerprint(root):
         from drawing_contract import illustration_actions
         plan_path = root/manifest['drawing_plan']
         paths.extend([root/'style/catalog.json',root/'style/selection.json',root/'style/resolved.json',plan_path,plan_path.with_suffix('.preflight.json'),root/manifest['drawing_review']])
-        paths.extend((root/action['outline_mask']).resolve() for action in illustration_actions(manifest) if action.get('outline_mask'))
+        paths.extend((root/action[key]).resolve() for action in illustration_actions(manifest) for key in ('outline_mask', 'region_map') if action.get(key))
     if timeline.get('narration_master'):
         from narration_master import verify_compiled_master
         verify_compiled_master(root, timeline)
@@ -44,6 +45,7 @@ def build_fingerprint(root):
     paths.extend(Path(clip['source']) for clip in timeline['audio_report'])
     for name in sorted(timeline['assets']):
         paths.extend(root / 'work' / 'assets' / f'{name}.{extension}' for extension in ('png', 'npz'))
+        paths.extend(sorted((root / 'work' / 'assets').glob(f'{name}-*.png')))
         if timeline['assets'][name].get('font'):
             paths.append(Path(timeline['assets'][name]['font']['path']))
         if timeline['assets'][name].get('source'):
@@ -67,7 +69,8 @@ def match_reveal_to_tip(metadata, reveal, mask, kinds):
             continue
         points = np.array(segment['points'])
         lengths = np.array(segment['lengths'])
-        along = np.clip((timestamps[selected] - segment['start']) / max(1e-8, segment['end'] - segment['start']), 0, 1) * lengths[-1]
+        along = distance_fraction(np.clip((timestamps[selected] - segment['start']) / max(1e-8, segment['end'] - segment['start']), 0, 1),
+                                  segment.get('profile', 'linear')) * lengths[-1]
         separation = np.hypot(xs[selected] - np.interp(along, lengths, points[:, 0]), ys[selected] - np.interp(along, lengths, points[:, 1]))
         distances[selected] = np.minimum(distances[selected], separation)
         radii[selected] = np.maximum(radii[selected], segment.get('radius', 0))
@@ -97,30 +100,31 @@ def verify_assets(root, timeline):
         from drawing_contract import validate_strokes
         validate_strokes(metadata)
         if metadata['type'] == 'illustration':
-            require('owners' in maps and bool(metadata.get('parts')), f'{name}: missing semantic ownership')
+            require('owners' in maps and 'ink_owner' in maps and bool(metadata.get('parts')), f'{name}: missing semantic ownership; rebuild the asset')
             require((maps['owners'][alpha>0]>=0).all(), f'{name}: unowned illustration pixels')
             parts=metadata['parts']
             require(max(part['outline_end'] for part in parts)<=min(part['fill_start'] for part in parts)+1e-6,
                     f'{name}: filling starts before all outlines are complete')
-            for phase,channel in [('outline','ink'),('fill','color')]:
+            # A stroke belongs wholly to one part (ink_owner); paint follows the pixel's part.
+            for phase,channel,owners in [('outline','ink',maps['ink_owner']),('fill','color',maps['owners'])]:
                 previous_end=0.
                 for index,part in enumerate(parts):
                     require(part[phase+'_start']>=previous_end-1e-6,f'{name}: semantic part order is broken')
                     previous_end=part[phase+'_end']
-                    selected=(alpha>0)&(maps['owners']==index)&np.isfinite(maps[channel])
-                    if selected.any():
-                        times=maps[channel][selected]
+                    times=maps[channel][(owners==index)&np.isfinite(maps[channel])]
+                    if times.size:
                         require(times.min()>=part[phase+'_start']-1e-6 and times.max()<=part[phase+'_end']+1e-6,
                                 f'{name}: pixels leak into another semantic part interval')
             entry['semantic_parts_in_order']=[part['id'] for part in parts]
-            ink_mask = (alpha > 0) & (maps['ink_weight'] > .01)
-            if ink_mask.any():
-                distances, _ = match_reveal_to_tip(metadata, maps['ink'], ink_mask, {'ink'})
+            drawn = np.isfinite(maps['ink']) & (maps['ink_ramp'] == 0)
+            if drawn.any():
+                distances, _ = match_reveal_to_tip(metadata, maps['ink'], drawn, {'ink'})
                 require(np.isfinite(distances).all() and distances.max() < 9, f'{name}: ink is too far from the nib')
                 entry['ink_tip_max_distance_px'] = float(distances.max())
-            color_mask = (alpha > 0) & (maps['ink_weight'] < .99)
-            if color_mask.any():
-                distances, radii = match_reveal_to_tip(metadata, maps['color'], color_mask, {'color'})
+            entry['faded_ink_pixels'] = int((np.isfinite(maps['ink']) & (maps['ink_ramp'] > 0)).sum())
+            painted = np.isfinite(maps['color'])
+            if painted.any():
+                distances, radii = match_reveal_to_tip(metadata, maps['color'], painted, {'color'})
                 require(np.isfinite(distances).all() and (radii > 0).all(), f'{name}: unpainted color pixels')
                 require((distances <= radii + .04).all(), f'{name}: color outside the active brush')
                 entry['paint_max_overshoot_px'] = float((distances - radii).max())
@@ -144,7 +148,9 @@ def verify_assets(root, timeline):
                         require(times.min()>=glyph['start']-1e-6 and times.max()<=glyph['end']+1e-6,
                                 f'{name}: a future character appears early')
                 entry['isolated_characters']=len(metadata['characters'])
-                require(distances.max() < 9, f'{name}: text is too far from the nib')
+                # Stroke-order glyphs reveal a whole brush width (up to ~0.13 em) around the median under the nib.
+                limit = max(9, .15 * metadata['font_size']) if metadata.get('handwriting', {}).get('mode') == 'stroke_order' else 9
+                require(distances.max() < limit, f'{name}: text is too far from the nib')
             else:
                 require((distances <= radii + .04).all(), f'{name}: marker outside the active brush')
             entry['maximum_tip_distance_px'] = float(distances.max())
@@ -218,6 +224,10 @@ def verify_job(job_directory, assets_only=False):
         require(tail_correlation > .98, 'Encoding changed or cut the final spoken phrase')
         report['ending_review'] = {**tail,'final_phrase_encoding_correlation':tail_correlation}
     report['audio_track_correlation'] = audio_correlation
+    report.update(verify_film_audio(work, timeline, video, report['audio_mix']))
+    if 'FAIL' in (report['audio_gate']['status'], report['caption_sync']['status']) and not json.loads((root/'job.json').read_text()).get('runtime_fixture'):
+        (work / 'verification.json').write_text(json.dumps({**report, 'status': 'audio_failed'}, ensure_ascii=False, indent=2))
+        require(False, 'Film audio failed: ' + json.dumps({'gate': report['audio_gate'].get('failures'), 'late_captions': report['caption_sync'].get('outside_tolerance')}, ensure_ascii=False))
     report['loudness'] = json.loads(match.group())
     require(-20 < float(report['loudness']['input_i']) < -14, 'Loudness outside expected narration range')
     require(float(report['loudness']['input_tp']) < -1, 'True peak too high')
@@ -236,7 +246,7 @@ def verify_job(job_directory, assets_only=False):
     report.update(status='engineering_passed_review_required', video_sha256=file_hash(video), cover_sha256=file_hash(output / 'cover.png'),
                   build_fingerprint=render_record['build_fingerprint'], frames=video_stream.get('nb_frames'), bytes=int(metadata['format']['size']))
     report['checks'] = {'full_decode': True, 'complete_timeline': True, 'paths_and_paint_coverage': True,
-                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'semantic_part_order':True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
+                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'audio_gate': report['audio_gate']['status'], 'caption_sync': report['caption_sync']['status'], 'semantic_part_order':True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
     (work / 'verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
     review_path = root / 'review.json'
     if not review_path.exists():
@@ -247,6 +257,18 @@ def verify_job(job_directory, assets_only=False):
     return report
 
 
+def verify_film_audio(work, timeline, video, audio_mix):
+    """Noise gate on the delivered narration (the film track, or the narration stem when music was requested)
+    and caption sync: cues start within align.SYNC_TOLERANCE_SECONDS of measured speech onsets."""
+    from audio_gate import measure, decode
+    from align import caption_sync
+    film = decode(video)
+    narration_only = not audio_mix['layers']
+    return {'audio_gate': measure(film if narration_only else decode(work/'normalized-narration.wav'),
+                                  'outputs/film.mp4 audio' if narration_only else 'work/normalized-narration.wav'),
+            'caption_sync': caption_sync(film, timeline['cues'])}
+
+
 def finalize_job(job_directory):
     root = Path(job_directory).resolve()
     report = json.loads((root / 'work' / 'verification.json').read_text())
@@ -254,6 +276,8 @@ def finalize_job(job_directory):
     video_hash = file_hash(root / 'outputs' / 'film.mp4')
     require(not json.loads((root/'job.json').read_text()).get('runtime_fixture'), 'Runtime fixtures can never be delivered as finished films')
     require(report['status'] == 'engineering_passed_review_required', 'Engineering checks must pass first')
+    require(report.get('audio_gate', {}).get('status') == 'PASS' and report.get('caption_sync', {}).get('status') == 'PASS',
+            'Film audio gate and caption sync must pass; verify again with this version')
     require(report['video_sha256'] == review['video_sha256'] == video_hash, 'Review belongs to a different video')
     timeline = json.loads((root / 'work' / 'timeline.json').read_text())
     require(timeline['manifest_sha256'] == file_hash(root / 'job.json'), 'Manifest changed since build')

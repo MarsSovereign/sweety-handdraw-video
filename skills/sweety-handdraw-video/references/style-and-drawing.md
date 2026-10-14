@@ -71,6 +71,17 @@ python3 scripts/drawing_contract.py JOB JOB/design/drawing-plan.json
 
 实际看图后，为 action 写 `drawing_plan_id`、按计划同顺序的 `parts` 多边形及必要排除区域，所有可见像素只能归属一个部位。多边形随实际解剖与遮挡，不用从上到下的等高横条代替语义部位。
 
+线稿闭合良好时，可改用编号区域：运行 `region_marks.py`，看叠图把编号分配给部位（`region_map` + `part_regions`，见[运行约定](runtime-contract.md)），比手写多边形更准。
+
+### 出图要求（让图真能被一笔一笔画出来）
+
+引擎会用 `lineart_gate.py` 拒绝纹理型线稿，并按真实笔画计算 `minimum_seconds`。出图提示与编辑时：
+
+- 连续、干净、粗细稳定的墨线轮廓；不要排线、交叉阴影、布纹/毛发/树皮纹理线和边缘检测感的碎线。
+- 部位交界处把轮廓闭合（叶基、衣摆、袖口、领口画出完整分界线），区域才能分开编号。
+- 平涂色块加柔和明暗；明暗不要用线条表达。
+- 控制线条数量：一幅约30—60笔、线长约5000—7000px时，全部描线加上色约需20—25秒（`minimum_seconds`）；口播窗口更短就简化画面或用 `visual_groups` 跨句延长窗口，不要指望淡入代替描线。
+
 `job.json` 指定 `drawing_plan` 和 `drawing_review`。使用 `outline_mask` 时，审核中还须 `outline_mask_sha256`，且遮罩尺寸必须与裁切前的完整原图一致。后者结构：
 
 ```json

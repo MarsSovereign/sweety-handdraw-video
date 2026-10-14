@@ -19,6 +19,8 @@ from watermark_assets import prepare_watermark
 from narration_master import load_master
 from audio_contract import resolve_audio_layers, validate_ending
 from fonts import check_coverage, select as select_font
+from storyboard_lint import anchor_beat, check_build, group_beats
+from timeline_contract import validate_page_motion
 
 PACKAGE = Path(__file__).resolve().parents[1]
 SAMPLE_RATE = 48000
@@ -187,6 +189,20 @@ class FilmBuilder:
             raise ValueError('Action weight must be finite and positive')
         return weight
 
+    @staticmethod
+    def minimum_seconds(action):
+        # Readers need about 0.3 s per hanzi to see the stroke order; Latin and punctuation write faster.
+        if action['type'] != 'text':
+            return 0.
+        return sum(.3 if '\u3400' <= character <= '\u9fff' else .12 for character in str(action['text']))
+
+    @staticmethod
+    def travel_gap(first, second, minimum):
+        # Lift-and-move time grows with distance so the pen never teleports between elements.
+        anchors = [np.array([float(spec['x']) + float(spec.get('width', spec.get('size', 60))) / 2,
+                             float(spec['y']) + float(spec.get('height', spec.get('size', 60))) / 2]) for spec in (first, second)]
+        return float(np.clip(np.linalg.norm(anchors[1] - anchors[0]) / 1600, max(minimum, .12), .45))
+
     def create_asset(self, action, seconds=None):
         self.next_asset += 1
         name = f'element-{self.next_asset:04d}'
@@ -195,13 +211,17 @@ class FilmBuilder:
             text = str(action['text'])
             if not text.strip() or '\n' in text:
                 raise ValueError('Each text action must contain one nonempty line')
-            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds)
+            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds,
+                                                stroke_order=bool(action.get('stroke_order', True)))
         elif kind == 'marker':
             metadata = stroke_assets.build_brush(name, int(action['width']), int(action['height']),
                 action.get('color', '#EAC958'), action.get('style', 'highlight'), action.get('line_width'), seconds=seconds)
         elif kind == 'illustration':
             source = resolve_input(self.root, action['source'])
-            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'),action.get('parts'),resolve_input(self.root,action['outline_mask']) if action.get('outline_mask') else None,seconds=seconds)
+            optional = lambda key: resolve_input(self.root, action[key]) if action.get(key) else None
+            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'), action.get('parts'),
+                optional('outline_mask'), seconds=seconds, region_map_path=optional('region_map'), part_regions=action.get('part_regions'),
+                lineart_exception=action.get('lineart_exception'), drawing={**self.manifest.get('drawing', {}), **action.get('drawing', {})})
         else:
             raise ValueError(f'Unsupported action type: {kind}')
         self.assets[name] = metadata
@@ -266,24 +286,8 @@ class FilmBuilder:
                 beat = {'id': beat_id, 'start': cursor, 'end': cursor + duration, 'duration': duration, 'text': beat_spec['text']}
                 if not str(beat['text']).strip():
                     raise ValueError('Narration text cannot be empty')
-                specs = beat_spec.get('actions',[])
-                if not specs and not page_spec.get('visual_groups'):
+                if not beat_spec.get('actions') and not page_spec.get('visual_groups'):
                     raise ValueError('Every beat needs actions or a page visual group')
-                lead = .54
-                hold = max(.5, duration * .13)
-                gap = .07
-                budget = duration - lead - hold - gap * max(0, len(specs) - 1)
-                if specs and budget < .15 * len(specs):
-                    raise ValueError(f'{beat_id}: too many drawing actions for the measured narration; simplify or regroup')
-                weights = [self.action_weight(spec) for spec in specs]
-                drawing_cursor = cursor + lead
-                for spec, weight in zip(specs, weights):
-                    # Assets are built after scheduling so the engine knows the real drawing seconds.
-                    drawing_seconds = budget * weight / sum(weights)
-                    action = self.create_asset(spec, drawing_seconds)
-                    action.update(start=drawing_cursor, end=drawing_cursor + drawing_seconds, caption=False)
-                    page['events'].append(action)
-                    drawing_cursor += drawing_seconds + gap
                 cue_source = aligned if master_report else beat_spec
                 if cue_source.get('caption_cues'):
                     beat['caption_cues'] = cue_source['caption_cues']
@@ -297,29 +301,56 @@ class FilmBuilder:
                     pause_samples = np.zeros(round(float(options.get('sentence_pause_seconds', .18)) * SAMPLE_RATE), dtype=np.int16)
                     pieces.append(pause_samples)
                     cursor += duration + len(pause_samples) / SAMPLE_RATE
-            if page_spec.get('visual_groups'):
-                for group in page_spec['visual_groups']:
-                    first_index=int(group['start_beat'])
-                    last_index=int(group.get('end_beat',first_index))
-                    if not 0<=first_index<=last_index<len(page['beats']):
-                        raise ValueError('Visual group beat indices must form an ordered range inside this page')
-                    first,last=page['beats'][first_index],page['beats'][last_index]
-                    lead,hold=float(group.get('lead',.54)),float(group.get('hold',.6))
-                    if not math.isfinite(lead+hold) or lead<0 or hold<.45:
-                        raise ValueError('Visual group needs a nonnegative lead and at least 0.45s reading hold')
-                    start = first['start'] + lead
-                    end = last['end'] - hold
-                    specs = group['actions']
-                    budget = end-start-.08*(len(specs)-1)
-                    if not specs or budget < .15*len(specs):
-                        raise ValueError('Visual group has no usable drawing time')
-                    weights=[self.action_weight(spec) for spec in specs]
-                    for spec, weight in zip(specs, weights):
-                        duration=budget*weight/sum(weights)
-                        action=self.create_asset(spec, duration)
-                        action.update(start=start,end=start+duration,caption=False)
-                        page['events'].append(action)
-                        start+=duration+.08
+            ids = [beat['id'] for beat in page['beats']]
+            blocks = [(beat['start'] + .54, beat['end'] - max(.5, beat['duration'] * .13), .07, spec['actions'], beat['id'])
+                      for spec, beat in zip(page_spec['beats'], page['beats']) if spec.get('actions')]
+            for group in page_spec.get('visual_groups', []):
+                covered = group_beats(ids, group)
+                lead, hold = float(group.get('lead', .54)), float(group.get('hold', .6))
+                if not math.isfinite(lead + hold) or lead < 0 or hold < .45:
+                    raise ValueError('Visual group needs a nonnegative lead and at least 0.45s reading hold')
+                if not group.get('actions'):
+                    raise ValueError('Visual group has no actions')
+                # A group keeps drawing across sentences; an action with from_beat starts when its sentence starts.
+                start, end, current = page['beats'][ids.index(covered[0])]['start'] + lead, page['beats'][ids.index(covered[-1])]['end'] - hold, []
+                for spec in group['actions']:
+                    anchor = page['beats'][ids.index(anchor_beat(covered, ids, spec))]['start']
+                    if current and spec.get('from_beat') is not None:
+                        if anchor - .08 <= start:
+                            raise ValueError('from_beat must name a sentence after the earlier actions of its visual group have started')
+                        blocks.append((start, anchor - .08, .08, current, f'visual group {covered[0]}..{covered[-1]}'))
+                        start, current = anchor, []
+                    start = max(start, anchor)
+                    current.append(spec)
+                blocks.append((start, end, .08, current, f'visual group {covered[0]}..{covered[-1]}'))
+            blocks.sort(key=lambda block: block[0])
+            for (_, previous_end, _, _, previous), (start, _, _, _, label) in zip(blocks, blocks[1:]):
+                if start < previous_end:
+                    raise ValueError(f'{label} starts drawing while {previous} is still drawing (one pen); '
+                                     'put both in one visual group and use "from_beat" to start an action with its sentence')
+            for start, end, gap, specs, label in blocks:
+                gaps = [self.travel_gap(first, second, gap) for first, second in zip(specs, specs[1:])] + [0.]
+                floors = [self.minimum_seconds(spec) for spec in specs]
+                available = end - start - sum(gaps)
+                if available < .15 * len(specs):
+                    raise ValueError(f'{label}: too many drawing actions for the measured narration; simplify or extend the window across beats with a visual group')
+                if available - sum(floors) < .15 * len(specs):
+                    # Readable writing time is preferred, not guaranteed: shrink it and say so.
+                    print(f'WARNING {label}: text needs {sum(floors):.2f}s to show stroke order but only {available:.2f}s exist; '
+                          'shorten the text or widen the window', file=sys.stderr)
+                    floors = [floor * (available - .15 * len(specs)) / sum(floors) for floor in floors]
+                free = available - sum(floors)
+                weights = [self.action_weight(spec) for spec in specs]
+                for spec, weight, floor, travel in zip(specs, weights, floors, gaps):
+                    # Assets are built after scheduling so the engine knows the real drawing seconds.
+                    seconds = floor + free * weight / sum(weights)
+                    action = self.create_asset(spec, seconds)
+                    action.update(start=start, end=start + seconds, caption=False, visual=spec.get('visual'))
+                    if spec['type'] == 'illustration':
+                        action['image'] = [spec['source'], spec.get('crop')]
+                    page['events'].append(action)
+                    start += seconds + travel
+            validate_page_motion(page, {'width': self.width, 'height': self.height}, first=page_index == 0)
             page['speech_end'] = page['beats'][-1]['end']
             pause = float(options.get('page_pause_seconds', .24)) if page_index < len(self.manifest['pages']) - 1 else float(options.get('end_hold_seconds', .45))
             if pause < 0:
@@ -375,6 +406,7 @@ class FilmBuilder:
                     'manifest_sha256': hashlib.sha256((self.root / 'job.json').read_bytes()).hexdigest()}
         from subtitle_contract import validate_subtitles
         validate_subtitles(timeline)
+        timeline['storyboard'] = check_build(self.root, self.manifest, timeline)
         cover = Image.open(resolve_input(self.root, self.manifest['cover']['source'])).convert('RGB')
         if abs(cover.width / cover.height - self.width / self.height) > .025:
             raise ValueError('Cover aspect ratio differs from canvas; generate or intentionally crop an appropriate cover')
@@ -387,5 +419,6 @@ class FilmBuilder:
             legacy.replace(editing / 'previous-captions.srt')
         (editing / 'transcript.srt').write_text('\n'.join(f"{index + 1}\n{subtitle_time(cue['start'])} --> {subtitle_time(cue['end'])}\n{cue['text']}\n" for index, cue in enumerate(cues)))
         (self.output / 'script.txt').write_text(self.manifest['title'] + '\n\n' + '\n\n'.join(cue['text'] for cue in cues))
-        print(json.dumps({'duration_seconds': timeline['duration'], 'pages': len(pages), 'beats': len(cues), 'drawn_assets': len(self.assets)}, ensure_ascii=False))
+        print(json.dumps({'duration_seconds': timeline['duration'], 'pages': len(pages), 'beats': len(cues), 'drawn_assets': len(self.assets),
+                          'storyboard': timeline['storyboard']['stats'], 'warnings': timeline['storyboard']['warnings']}, ensure_ascii=False))
         return timeline

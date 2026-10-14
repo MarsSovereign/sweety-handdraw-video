@@ -60,17 +60,32 @@
 
 ## 绘制和时序
 
-- `text`：`text/x/y/size/color/weight`，一行一项。每个字形在独立区域内描线，后字不会提前露出。默认近似字形路径，不保证规范书法笔顺。图层按各字真实边界计算，并保留至少5px空白；禁止用字号估算高度。
+- `text`：`text/x/y/size/color/weight`，一行一项。每个字形在独立区域内描线，后字不会提前露出。图层按各字真实边界计算，并保留至少5px空白；禁止用字号估算高度。
 - `marker`：`style` 为 `highlight/underline/circle/box`，使用 `width/height/color/line_width`。
 - `illustration`：`source/x/y/width/height`，可设像素裁切 `crop`。保持比例缩入框。
 - `parts`：有序数组，唯一 `id` 与归一化 `polygon` 坐标。坐标相对裁切后的图。区域重叠时先声明者拥有像素；所有可见像素必须有归属。模型看图后确定边界，避免切碎手指、轮廓或道具。轮廓按数组顺序完成全部部位，再按同一顺序填色。笔划间抬笔。
 - 前景手臂、持物或其他遮挡可用 `exclude_polygons` 给出归一化排除多边形数组；从头部或躯干排除的像素必须由后续正确部位接管。不要因为手臂横过胸前就让它在躯干阶段提前显现。
 - 复杂遮挡可用部位的 `exclude_hsv:[[hue_min,hue_max,saturation_min,value_min]]` 排除透过发丝等空隙可见的背景颜色（色相0—360，饱和度/亮度0—1）。排除的像素必须由后续正确部位接管，需实际看图验证，不能仅以颜色自动推断语义。
 - `weight` 只分配对应音频窗口里的绘制时间，不是秒数。所有元素可设 `z`；底纹默认位于文字下面。
+- 编号区域（可替代多边形）：`python3 scripts/region_marks.py JOB <drawing_plan_id>` 把线稿的闭合区域（大区域内再按颜色细分）编号，写出 `design/regions/<id>.png` 叠图、`.npz` 区域图（绑定源图哈希）和 `.json`。看叠图后在 action 写 `"region_map":"design/regions/<id>.npz","part_regions":[{"id":"head","regions":[3,4,7]},...]`，顺序即绘制顺序、id 与计划 parts 一致。每个编号只能属于一个部位；漏掉的可见区域会报错并列出编号；换图后须重跑。线稿在部位交界处不闭合（叶基通向茎、衣摆通向裤腿）时一个编号会跨两个部位，此时改用 `parts` 多边形。部位可加 `"key": true`，与 id 含 head/face/eye/mouth/hand/paw 的部位一样优先保留真实描线。
+- 线稿门槛：`python3 scripts/lineart_gate.py SOURCE --width W --height H [--crop ...] [--outline-mask ...]` 测交叉点密度、小闭合孔、碎点和短纹理线占比；构建时同样检查。纹理型线稿（如边缘检测出的布纹）无法一笔一笔画，build 报错。优先按[可绘制约定](style-and-drawing.md)重新出图；确属有意的复杂画面才在 action 写 `"lineart_exception":"原因"`。
+- `drawing`：job 顶层或 action 内 `{"speed":1.0,"sketch":false}`，action 覆盖顶层。`speed`（0.25—4）缩放人手基准速度及其上限（描线4倍、上色6倍人速，且笔尖每帧移动不超过约80px）；`sketch:true` 先画淡色构图线，描线后淡出。
+- 插画引擎（draw-v2）：轮廓经清理、骨架化后沿切线连续穿过交叉点成整笔，每笔整体属于一个部位；部位内先外形、再内部结构、后细节，就近衔接并偏向从上到下、从左到右，闭合形从顶部起笔。每笔 min-jerk 速度、转弯处放慢、至少2帧；抬笔80—150ms，且移动不超过约80px/帧。上色按部位、按区域用中位色以连续之字形大笔涂（区域内不抬笔），再用短暂的阴影笔从平涂过渡到原图。资产为 `{name}.png` 终帧加 `-line/-paint/-shade(-sketch).png` 图层和 `.npz` 时间图，逐帧合成，终帧与最后一帧一致。
+- 时长：元数据 `drawability.required_seconds` 是全部按人速画完所需，`minimum_seconds` 是除纹理线外全部线条按上限速度描完、再用最宽笔快速上色所需。窗口低于 `minimum_seconds` 时故事板检查报错；介于两者之间时细节加速、纹理线在所属部位末尾淡入，计数见 `drawn_stroke_count/faded_stroke_count`。`python3 scripts/engine_metrics.py work/assets element-0007` 输出笔画长度、抬笔路径、跳笔、反向、速度变化和“首次可见即终色”等客观指标。
+
+汉字按规范笔顺手写：字形与笔画中线来自 Make Me a Hanzi（`assets/hanzi`，Arphic Public License），笔尖沿中线移动，笔画按经过的位置显现，逐笔抬笔，逐字从左到右；字形按所选字体的汉字高度和中心对齐，并略加粗以接近马克笔。包内含 GB2312 全部6763字；其他字首次使用时从 jsDelivr 固定版本下载到素材缓存，离线或无数据不报错。只要一行中有一个汉字缺数据，整行改用字体骨架描线（保持同一观感），资产元数据 `handwriting.mode/reason` 记录原因。拉丁字母、数字和标点沿字体路径，横向笔画从左到右、其余从上到下。每笔至少2帧、限速；`handwriting.natural_seconds/minimum_seconds` 给出自然与最低时长，分到的时间不足时整体压缩并在 build 时提示。笔顺要看得清，标题每字约需0.3—0.6秒，用 `weight` 给足时间。
 
 跨多句的一个完整画面可以使用页面 `visual_groups`，每组为 `{"start_beat":0,"end_beat":2,"lead":0.54,"hold":0.72,"actions":[...]}`，索引从0开始。此时 beats 中的 actions 可以为空或省略。起止索引必须有序且在该页范围内，lead 非负，hold 至少0.45秒；多个组不能造成主笔事件重叠。不要给每句机械安排一幅新图。
 
 生产任务必须使用 `narration.source/alignment` 指定完整旁白母带和对应时间戳，字段见[连续旁白约定](continuous-narration.md)。`audio.end_hold_seconds` 只控制整篇声音结束后的画面停留；生产任务拒绝非零 `sentence_pause_seconds/page_pause_seconds`、`pace` 非1和 `trim_silence:true`。绘制窗口太短则简化画面或合并绘制窗口，不能截短呼吸、插入空白或拉慢旁白来容纳画面。封面只接受1秒，前半秒静止、后半秒渐隐，正文和旁白从1秒后开始。
+
+## 镜头与转场
+
+页面可加 `camera` 关键帧数组，在整张画面上推近、移动：`{"at": 秒数或 "beat:<本页beat id>", "center": [x, y], "zoom": 1.0—1.3, "seconds": 0—3, "ease": "inout"|"linear", "follow": false}`。`at` 从本页开始计时，是移动开始时刻；`at` 为0的关键帧直接作为开页取景，其余在 `seconds`（默认0.8）内以缓入缓出滑到目标。`center` 默认画布中心，`zoom` 默认1；取景永远不出画布。`follow:true` 时镜头在该缩放内温和跟随笔尖。字幕和水印属于屏幕层，不随镜头缩放。
+
+页面可加 `transition` 描述进入本页的方式：`{"type": "slide"|"pan"|"cut"|"fade", "seconds": 0.3—1.0}`，首页不能设置。`pan` 把下一页放在同一块大白板的右侧，镜头带轻微拉远滑过去，两页同时可见；`slide` 两页并排平移；`fade` 交叉淡化；`cut` 直接切换。转场只放在上一页最后一笔之后、本页第一笔之前，空间不够时自动缩短；正在离场或入场的手跟随所属页面移动。不设置时保持旧行为：上一页最后0.24秒向左滑出。需要完整转场时给本页 visual group 的 `lead` 和上一页的 `hold` 各留至少一半转场时长。
+
+全片只有一支笔：同页相邻两笔间隔不超过1秒时手留在画面内，抬笔、停顿后以最小加加速度轨迹滑到下一笔；更长的停顿或换页时，手沿弧线从右下方离开、再沿弧线回到下一笔起点。手腕随平滑后的横向笔速最多转动约7°（绕笔尖旋转；会让前臂裁切边入画的转动自动收回），并带随抬笔轻微分离的柔和投影。同组动作之间只隔约0.08秒，相距很远的两个动作之间笔仍会移动很快，排版时让相邻动作就近。
 
 ## 手、字体和字幕
 
@@ -99,6 +114,22 @@ python3 /path/to/skill/scripts/handdraw_video.py verify /path/to/job
 先实际查看短段再导出整片。verify 完整解码并生成成片抽帧，只代表工程检查。按 [检查与返工](quality-gates.md) 填写检查证据后，才运行 `finalize`。它会拒绝未检查记录、哈希过期和运行测试夹具。
 
 输出 `film.mp4/cover.png/captions.srt/script.txt/verification.json/verification.txt`。另存中文名时保留原件与哈希。脚本、图片、音频、设计或布局变化均需重渲染和复核。`runtime_fixture:true` 仅供包内离线测试，永远不能生成成片交付回执。
+
+## 分镜
+
+生产任务在 `job.json` 设 `"storyboard": "storyboard.json"`（格式见[创作与分镜](story-design.md)），每个属于计划视觉的动作加 `"visual": "v01"`；插画必须带，没带的文字/马克笔视为标签。
+
+- `visual_groups` 的 `start_beat/end_beat` 可写页内索引或 beat id。组内动作可加 `"from_beat": "b2"`：前面的动作画到该句开始前，这个动作随该句起笔；组跨句连续绘制，下一句开始时可以继续画。
+- 同页两个绘制块（beat 动作或组）时间重叠时，构建直接报错，提示合并为一个组并用 `from_beat` 对齐；不再等到渲染才发现。
+- 构建把 `visual` 与插画 `image:[source,crop]` 写入事件，运行分镜检查：错误中止，统计与警告写入 `timeline.storyboard`。
+- 有 storyboard 时，drawing-plan 的 subject 须有 `identity_cues`，drawing-review 须有 `recognizability`；出现已声明角色的插画在 drawing-plan 写 `references`。
+
+```bash
+python3 /path/to/skill/scripts/storyboard_lint.py /path/to/job --budget   # 生图前：预算与复杂度档位
+python3 /path/to/skill/scripts/storyboard_lint.py /path/to/job            # 写完 job.json：计划是否全部落地
+python3 /path/to/skill/scripts/plan_status.py /path/to/job                # 按镜头列出剩余工作
+python3 /path/to/skill/scripts/drawing_contract.py /path/to/job --thumbnails  # 缩略图识别测试
+```
 
 ## 画风与绘制计划门槛
 

@@ -37,7 +37,7 @@ class DrawingContractTests(unittest.TestCase):
         cases=[('把顺利，留给准备',84),('允许事情出错',72),('gypj，准备好了。',60)]
         for index,(text,size) in enumerate(cases):
             font=ImageFont.truetype(font_path,size,index=font_index)
-            metadata=stroke_assets.build_text('complete-'+str(index),text,size)
+            metadata=stroke_assets.build_text('complete-'+str(index),text,size,stroke_order=False)
             actual=Image.open(self.directory/('complete-'+str(index)+'.png')).getchannel('A')
             reference=Image.new('L',(actual.width+400,actual.height+400))
             drawing=ImageDraw.Draw(reference)
@@ -67,25 +67,33 @@ class DrawingContractTests(unittest.TestCase):
         return path,parts
 
     def test_part_isolation_outline_then_fill_and_lifted_travel(self):
+        # draw-v2: strokes belong wholly to one part (ink_owner) and fill starts when every outline is done,
+        # at a time set by the measured line/fill seconds rather than a fixed 60% split.
         path,parts=self.make_figure()
-        metadata=stroke_assets.build_illustration('figure',path,180,260,parts=parts)
+        metadata=stroke_assets.build_illustration('figure',path,180,260,parts=parts,seconds=6)
         maps=np.load(self.directory/'figure.npz')
         alpha=np.array(Image.open(self.directory/'figure.png'))[:,:,3]
-        for part in metadata['parts']:
-            owned=(maps['owners']==part['index'])&(alpha>0)
-            ink=owned&(maps['ink_weight']>0)
-            fill=owned&(maps['ink_weight']<1)
+        reports=metadata['parts']
+        self.assertLessEqual(max(part['outline_end'] for part in reports),min(part['fill_start'] for part in reports)+1e-7)
+        for part in reports:
+            self.assertTrue(all(0<=part[key]<=1 for key in ('outline_start','outline_end','fill_start','fill_end')))
+            ink=(maps['ink_owner']==part['index'])&np.isfinite(maps['ink'])
+            fill=(maps['owners']==part['index'])&np.isfinite(maps['color'])
             if ink.any():
                 self.assertGreaterEqual(float(maps['ink'][ink].min())+1e-7,part['outline_start'])
+                self.assertLessEqual(float(maps['ink'][ink].max()),part['outline_end']+1e-7)
             if fill.any():
                 self.assertGreaterEqual(float(maps['color'][fill].min())+1e-7,part['fill_start'])
-                self.assertGreaterEqual(float(maps['color'][fill].min()),.60)
-        fill=(alpha>0)&(maps['ink_weight']<.99)
+        fill=np.isfinite(maps['color'])
         distances,radii=match_reveal_to_tip(metadata,maps['color'],fill,{'color'})
         self.assertTrue((distances<=radii+.04).all())
+        drawn=np.isfinite(maps['ink'])&(maps['ink_ramp']==0)
+        distances,_=match_reveal_to_tip(metadata,maps['ink'],drawn,{'ink'})
+        self.assertLess(distances.max(),9)
         self.assertTrue(any(segment['kind']=='travel' for segment in metadata['segments']))
         drawing=[segment for segment in metadata['segments'] if segment['kind']=='ink']
         self.assertGreater(len(drawing),4)
+        self.assertTrue(all(segment['profile']=='minjerk' for segment in drawing))
 
     def test_missing_or_incomplete_semantic_parts_stop_build(self):
         path,parts=self.make_figure()

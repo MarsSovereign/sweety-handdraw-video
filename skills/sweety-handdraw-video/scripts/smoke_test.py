@@ -53,7 +53,7 @@ def main():
         rare = RARE if select('handwriting', RARE) and select('caption', RARE) else ''
     except (ValueError, FileNotFoundError):
         rare = ''
-    durations = [3.6, 4.4, 3.2]
+    durations = [8.0, 4.4, 3.2]  # beat a holds a title, a marker and a two-region icon that needs ~2.1 s to draw
     for index, duration in enumerate(durations):
         write_test_tone(inputs / f'beat-{index}.wav', duration, 220 + 55 * index)
     manifest = {'version': 1, 'runtime_fixture': True, 'title': '运行回归测试', 'canvas': {'width': 960, 'height': 540, 'fps': 24},

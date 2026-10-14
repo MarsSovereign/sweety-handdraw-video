@@ -1,7 +1,9 @@
 """Retime approved video frames with one monotonic map; do not redraw its layers."""
+import hashlib
 import math
 from pathlib import Path
 import subprocess
+from video_renderer import aigc_arguments
 
 
 def validate_anchors(anchors):
@@ -48,6 +50,6 @@ def retime_frames(source, mixed_audio, anchors, destination, filter_record, fps=
     subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source),
         '-i', str(mixed_audio), '-filter_script:v', str(filter_record), '-map', '0:v:0', '-map', '1:a:0',
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '16', '-threads', '4', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '192k', '-t', str(anchors[-1][1]), '-movflags', '+faststart',
-        '-map_metadata', '-1', str(temporary)], check=True)
+        '-c:a', 'aac', '-b:a', '192k', '-t', str(anchors[-1][1]), '-map_metadata', '-1',
+        *aigc_arguments(hashlib.sha256(source.read_bytes()).hexdigest()[:16]), str(temporary)], check=True)
     temporary.replace(destination)

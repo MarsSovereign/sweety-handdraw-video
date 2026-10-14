@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Generate narration with an explicitly configured, already installed VoxCPM2 model."""
+"""Generate narration per semantic chunk with an explicitly configured, already installed VoxCPM2 (MLX).
+
+Modes follow the official VoxCPM2 guide (references/voxcpm2.md): combined = Hi-Fi cloning with the same
+clean clip as reference and prompt plus its exact transcript; reference = timbre only, optional style
+instruction; design = voice from a text description (varies per call, so lock a designed reference).
+"""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 from voice_studio import voice_reference, load_voice_catalog
-from narration_master import generation_target
+from narration_master import build_master
+
+MODES = ('combined', 'reference', 'design')
 
 
 def resolved_options(options, root):
@@ -13,7 +20,7 @@ def resolved_options(options, root):
     identifier = options.get('voice', catalog['default'])
     profile = next((voice for voice in catalog['voices'] if voice['id'] == identifier), {})
     approved = profile.get('verified_generation_parameters', {})
-    fields = ('mode', 'cfg_value', 'timesteps', 'seed', 'max_tokens', 'model_path', 'enhancement_model_path')
+    fields = ('mode', 'cfg_value', 'timesteps', 'seed', 'model_path', 'enhancement_model_path', 'style')
     defaults = {key: approved[key] for key in fields if key in approved}
     return {**defaults, 'voice': identifier, **options}
 
@@ -28,10 +35,19 @@ def enhancement_fingerprint(path):
     return {'model_path':str(directory), 'weights_sha256':hashlib.sha256(weights.read_bytes()).hexdigest()}
 
 
+def generation_kwargs(params, text, reference=None, transcript=None):
+    """Official defaults: cfg 2.0, 10 steps; max length = 6 patches per text token + 10 (retry_badcase)."""
+    kwargs = {'text': text, 'inference_timesteps': params['timesteps'], 'cfg_value': params['cfg_value'], 'max_tokens': len(text) * 6 + 10}
+    if params['mode'] == 'combined':
+        return {**kwargs, 'ref_audio': str(reference), 'prompt_audio': str(reference), 'prompt_text': transcript}
+    if params['mode'] == 'reference':
+        return {**kwargs, 'ref_audio': str(reference), **({'instruct': params['style']} if params.get('style') else {})}
+    return {**kwargs, 'instruct': params['design']}
+
+
 def generate(job):
     import mlx.core as mx
     import numpy as np
-    import soundfile as sf
     from mlx_audio.tts.utils import load
     root = Path(job).resolve()
     manifest = json.loads((root/'job.json').read_text())
@@ -39,53 +55,35 @@ def generate(job):
     model_path = Path(options.get('model_path', '')).expanduser()
     if not options.get('model_path') or not (model_path/'config.json').is_file():
         raise ValueError('Set voxcpm.model_path to an already installed local VoxCPM2 model')
-    reference, transcript = voice_reference(options, root)
+    params = {'mode': options.get('mode', 'combined'), 'cfg_value': float(options.get('cfg_value', 2.)),
+              'timesteps': int(options.get('timesteps', 10)), 'style': options.get('style'), 'design': options.get('design')}
+    if params['mode'] not in MODES or (params['mode'] == 'design') != bool(params['design']):
+        raise ValueError('VoxCPM2 mode must be combined, reference or design; voxcpm.design is required in design mode only')
+    reference, transcript = voice_reference(options, root) if params['mode'] != 'design' else (None, None)
+    enhancement = enhancement_fingerprint(options.get('enhancement_model_path'))
     model = load(str(model_path.resolve()))
-    target, complete_text = generation_target(root, manifest)
-    for beat in [{'id': 'narration-master', 'text': complete_text, 'audio': str(target)}]:
-        target = (root/beat['audio']).resolve()
-        if not target.is_relative_to(root):
-            raise ValueError('Narration output must stay in the job')
-        params = {'text':beat['text'],'seed':int(options.get('seed',2026)),
-                  'timesteps':int(options.get('timesteps',10)),'cfg_value':float(options.get('cfg_value',2.)),
-                  'mode':options.get('mode','combined'),'max_tokens':int(options.get('max_tokens',6500))}
-        params['enhancement'] = enhancement_fingerprint(options.get('enhancement_model_path'))
-        if params['mode'] not in ('combined','reference'):
-            raise ValueError('VoxCPM2 mode must be combined or reference')
-        signature = hashlib.sha256(json.dumps(params,sort_keys=True).encode()+reference.read_bytes()+transcript.encode()+str(model_path.resolve()).encode()).hexdigest()
-        record_path = target.with_suffix('.voice.json')
-        if target.is_file() and record_path.is_file() and json.loads(record_path.read_text()).get('signature') == signature:
-            continue
-        if target.exists() and not record_path.exists():
-            raise ValueError('Existing untracked narration will not be overwritten: '+str(target))
-        mx.random.seed(params['seed'])
-        conditioning = {'prompt_audio':str(reference),'prompt_text':transcript} if params['mode']=='combined' else {}
-        result = list(model.generate(text=beat['text'], ref_audio=str(reference), **conditioning,
-                      inference_timesteps=params['timesteps'], cfg_value=params['cfg_value'], max_tokens=params['max_tokens']))
-        samples = np.concatenate([np.asarray(chunk.audio) for chunk in result])
-        if not len(samples) or not np.isfinite(samples).all():
-            raise ValueError('Generated narration is empty or non-finite')
-        if params['enhancement']:
-            from mlx_audio.sts.models.deepfilternet import DeepFilterNetModel
+    cleaner = None
+    if enhancement:
+        from mlx_audio.sts.models.deepfilternet import DeepFilterNetModel
+        cleaner = DeepFilterNetModel.from_pretrained(enhancement['model_path'], subfolder=None)
+
+    def synthesize(text, seed):
+        mx.random.seed(seed)
+        result = list(model.generate(**generation_kwargs(params, text, reference, transcript)))
+        samples = np.concatenate([np.asarray(chunk.audio) for chunk in result]).astype(np.float32)
+        if cleaner is not None:
             if result[0].sample_rate != 48000:
                 raise ValueError('Configured speech cleanup requires a 48 kHz narration waveform')
-            cleaner = DeepFilterNetModel.from_pretrained(params['enhancement']['model_path'], subfolder=None)
-            enhanced = np.asarray(cleaner.enhance_array(samples), dtype=np.float32)
-            if len(enhanced) != len(samples) or not np.isfinite(enhanced).all():
-                raise ValueError('Speech cleanup changed narration duration or produced invalid samples')
-            samples = enhanced
-        target.parent.mkdir(parents=True,exist_ok=True)
-        temporary = target.with_name(target.stem+'.generating.wav')
-        sf.write(temporary,samples,result[0].sample_rate,subtype='PCM_24')
-        temporary.replace(target)
-        record_path.write_text(json.dumps({'signature':signature,'text':beat['text'],'model_path':str(model_path),
-            'duration':len(samples)/result[0].sample_rate,'voice':options.get('voice'),'method':'single_call_complete_script','conditioning':params['mode'],
-            'reference_audio':str(reference),'reference_sha256':hashlib.sha256(reference.read_bytes()).hexdigest(),
-            'reference_text':transcript,'parameters':params,'subjective_listening':'not_performed'},ensure_ascii=False,indent=2))
-        print('READY',beat.get('id',target.stem),flush=True)
+            samples = np.asarray(cleaner.enhance_array(samples), dtype=np.float32)
+        return samples, result[0].sample_rate
+
+    identity = {'engine': 'voxcpm2-mlx', 'model_path': str(model_path.resolve()), 'voice': options.get('voice'), **params, 'enhancement': enhancement,
+                'reference_sha256': hashlib.sha256(reference.read_bytes()).hexdigest() if reference else None, 'reference_text': transcript}
+    target, alignment = build_master(root, manifest, synthesize, identity, options)
+    print('READY', target, alignment, flush=True)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('job',type=Path)
     generate(parser.parse_args().job)

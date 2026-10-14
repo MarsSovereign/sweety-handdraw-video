@@ -2,51 +2,59 @@
 
 运行需要 Python 3.9+、Pillow、NumPy、SciPy、requests、fontTools、ffmpeg/ffprobe，`scripts/setup.sh` 在 macOS 与 Linux 上一次装好（`--check` 只检查）。正文手写字体优先 macOS Hannotate；字幕使用独立的常规中文字体，Linux 经 fontconfig 选用 Noto CJK。构建前 `scripts/fonts.py` 按手写、字幕、水印逐字核对字形，缺字时依次换备用字体，全部缺字则列出缺失字符与已尝试字体并停止。字体回退不能当作手写风格已验收，不把系统商业字体复制进包。
 
-## 本地配音能力
+## 配音后端：本地优先，云端可选
 
-优先使用当前已配置可用的本地配音能力。VoiceStudio 不可达时可使用任务已明确配置的本地 VoxCPM2；两者都不可用且没有现成音频时，报告能力缺口。偏好超时不等于可以凭空生成声音、购买或安装服务。已有核对过的整篇旁白及其时间戳可离线合成。
+`voice_backends.voice_backends_report()`（`python3 scripts/voice_backends.py`）列出本机已安装的能力，不安装、不下载、不读取密钥内容：
 
-VoiceStudio 适配器默认访问本机 `http://127.0.0.1:3900`，读取当前引擎后才生成，当前配置为 `mlx-audio` / `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16`。它不启动应用、不改引擎、不下载模型、不读凭据。
-
-```bash
-python3 scripts/voice_studio.py JOB --transcribe
-```
-
-声音目录 `assets/voices/catalog.json` 固定六项，顺序如下：
-
-| 名称 | ID | 生产参考 |
+| 后端 | 条件 | 命令 |
 |---|---|---|
-| 逼真男声 | `realistic-man` | 《那条死于愤怒的蛇》实际使用的原始录音参考 |
-| 逼真女声 | `bilibili-outro` | 《快乐囚禁你的方式》当前使用的原片提取人声 |
-| 甜美学姐 | `sweet-student` | 已有合成参考 |
-| Iapetus | `iapetus` | 用户提供的 Gemini Iapetus 合成参考 |
-| 知性女讲师 | `calm-woman` | 已有合成参考 |
-| 故事解说 | `story-narrator` | 独立保留的故事解说合成参考 |
+| 本地 VoxCPM2（默认） | 装有 `mlx-audio` 的 Python（`HANDDRAW_MLX_PYTHON`）与已安装模型（`voxcpm.model_path` 或 `HANDDRAW_VOXCPM_MODEL`） | `python scripts/voxcpm_voice.py JOB` |
+| 本地 VoiceStudio | 用户自行启动的 `http://127.0.0.1:3900`；适配器不启动应用、不改引擎 | `python3 scripts/voice_studio.py JOB [--transcribe]` |
+| 火山引擎豆包语音合成 2.0（可选） | 用户自己的 `VOLC_TTS_API_KEY`，或 `VOLC_TTS_APP_ID` + `VOLC_TTS_ACCESS_KEY` | `python3 scripts/volcengine_tts.py JOB` |
+| Gemini TTS（可选） | 用户自己的 `GEMINI_API_KEY` | `python3 scripts/gemini_tts.py JOB` |
 
-女声保留原有内部 ID 以兼容旧任务，展示名统一为逼真女声。两款逼真声音的原始录音只存在本机个人声音库或任务目录中，公共包提供成片节选试听；没有导入原片参考时只能试听，不能用于生成。其余四款提供同文试听和可下载的合成参考。Iapetus 通过本地模型参考合成，不是原生 Gemini 接口。故事解说与逼真男声分别保留，不能互相代替。
+云端只在用户配置了自己的密钥并明确选择时使用，永远不是默认，也不在本地失败时自动改用。云端输出不能作为克隆参考。两个云端适配器按官方文档实现、用模拟 HTTP 测试，本仓库未做真实调用。火山引擎：`volcengine:{"speaker":"zh_male_cixingjieshuonan_uranus_bigtts","resource_id":"seed-tts-2.0","speech_rate":0}`，返回的字级时间戳直接用于字幕；Gemini：`gemini_tts:{"model":"gemini-3.8-flash-tts","voice":"Iapetus","style":"沉稳的纪录片旁白"}`，没有时间戳，字幕由本地 ASR 或停顿切分。
 
-## 试听与参考导入
+所有后端都按[语义段落](continuous-narration.md)逐段生成、门禁、重试并拼接母带，写 `alignment.json`；按文本、参数、模型、参考哈希缓存，未追踪的现有音频不覆盖。VoiceStudio 适配器显式发送 Qwen3-TTS 官方采样参数（temperature 0.9、top_p 1.0、top_k 50、repetition_penalty 1.05），但 VoiceStudio 0.5.x 的 `/generate` 没有这些字段，实际使用模型默认值；`max_chunk_chars=0`，分段由本流程完成。
 
-声音名称只是选择标签，不代表音质验收。当前逼真女声暂用，后续仍需调整听感。试听节选不能反过来充当两款原片声音的克隆参考。换稿件、模型或后端后仍须核对同文、正文短样和完整旁白。
+辅助工具（找到才用）：HTDemucs（`HANDDRAW_DEMUCS_PYTHON`、`HANDDRAW_HTDEMUCS_WEIGHTS`）、DeepFilterNet3（`HANDDRAW_DFN_MODEL`，默认 `~/.local/share/sweety-handdraw-video/voices/models/DeepFilterNet3`）、Whisper（`HANDDRAW_ASR_MODEL`，默认 HF 缓存中的 `mlx-community/whisper-large-v3-turbo`）、强制对齐模型（`HANDDRAW_ALIGNER_MODEL`）。子进程以离线模式运行，不会隐式下载。
+
+## 声音目录
+
+`assets/voices/catalog.json`：
+
+| 名称 | ID | 参考 |
+|---|---|---|
+| 逼真男声 | `realistic-man` | 《那条死于愤怒的蛇》原始录音经清理后的参考，只在本机个人声音库 |
+| 逼真女声 | `bilibili-outro` | 《快乐囚禁你的方式》原片提取人声，只在本机个人声音库 |
+| 磁性解说男声 | `magnetic-narrator` | VoxCPM2 文字描述设计的合成声音，可分发 |
+| 儒雅青年 | `scholarly-young-man` | 同上 |
+| 温柔知性女声 | `gentle-intellectual-woman` | 同上 |
+| 悬疑故事解说 | `suspense-storyteller` | 同上 |
+
+公共默认是可分发的合成声音；个人目录的 `default` 可改为本机主力音色。来源与授权见[声音来源](voice-sources.md)。两款逼真声音在公共包里只有成片节选试听，没有导入原始参考时不能生成。
+
+## 参考导入与自定义声音
+
+参考在导入和每次使用时都要通过：未改动（哈希）、`audio_gate` 短片段门禁（嗡声/单频、停顿深度、直流、削波）、逐字稿覆盖整段（语速 2.5–8 字/秒）。不通过时先清理：
 
 ```bash
-python3 scripts/import_voice.py JOB --id realistic-man --name "逼真男声" --audio reference.wav --transcript reference.txt --kind source_recording
-python3 scripts/import_voice.py JOB --id bilibili-outro --name "逼真女声" --audio reference.wav --transcript reference.txt --kind source_recording
+python3 scripts/clean_reference.py source.wav --start 31.6 --end 46.0 --transcript exact.txt --output NEW_DIR
+python3 scripts/import_voice.py JOB --id realistic-man --name "逼真男声" --audio NEW_DIR/reference.wav --transcript NEW_DIR/transcript.txt --kind source_recording
+python3 scripts/import_voice.py JOB --id my-voice --name "我的声音" --audio me.wav --transcript me.txt --consent self
 ```
 
-导入结果在 `options/local-voices.json`，只覆盖该任务的同名参考，不能新增第七项。个人目录与任务目录合并时，名称和原片参考要求以包内目录为准；旧目录中不在这六项内的条目和默认值不再生效。`reference_audio/reference_text` 可用于显式配置参考，文本必须逐字对应录音。
+`clean_reference.py` 可选 HTDemucs 人声分离与 DeepFilterNet3 降噪，裁成 8–15 秒、句末结束、尾部 0.5 秒以上静音，峰值 −3 dBFS；原文件不改动，新目录已存在参考时拒绝覆盖，`clean-record.json` 记录源哈希、使用区间、各步模型权重哈希、门禁前后数值和 ASR 覆盖。请求的起止点附近找不到句子边界时报错，不在句中切。
 
-不要把音频或凭据上传到未经授权的服务。整篇旁白按完整文本、参数、模型和参考音频哈希缓存，未追踪的现有音频不覆盖。ASR 同音字须结合原文判断；识别完整不等于主观听感验收。
+自定义声音不限数量：个人目录 `~/.local/share/sweety-handdraw-video/voices/catalog.json` 或任务 `options/local-voices.json` 中，新 ID 的条目须有 `name`、`reference_audio`、`reference_text` 与 `"consent": "self"`（本人声音）或 `"authorized"`（说话人授权）。没有同意声明的条目会被忽略。不要克隆他人、主播或平台音色。包内预设的名称、描述和原片要求不能被本地目录改写。
 
-## 已安装的 VoxCPM2
+## 本机个人声音库
 
-当前 Python 环境须已有 `mlx-audio`、`mlx`、`soundfile` 及本地模型。任务设置 `voxcpm:{"model_path":"实际已安装的模型目录","voice":"story-narrator","timesteps":10,"cfg_value":2.0}`，用该环境执行：
+个人目录与可分发的 Skill 包分开，记录实际参考、逐字稿、哈希、清理过程、试听样本和验收状态；未经听感验收的条目标 `pending_listening`，暂用声音不得记为通过。修改前先备份目录与原文件（本次备份在 `backups/2026-10-14-before-v1.3/`），新文件与原文件并存，不删除原始录音。`enhancement_model_path` 可指向已安装的 DeepFilterNet3，对生成结果做保长度的 48 kHz 后处理，权重哈希纳入缓存。
 
-```bash
-python scripts/voxcpm_voice.py JOB
-```
+## 原片音色验收
 
-适配器读取同一参考目录，按音频、文本、模型路径和参数缓存，不下载模型或改变 VoiceStudio。两种适配器都把全部 beats 的文本按原顺序合并为一次完整生成请求，目标是 `narration.source`（未配置时写 `inputs/narration/master.wav`）。VoxCPM2 默认 `mode:combined`，以原参考和准确逐字稿共同约束声音；`reference` 模式仅在明确选择时使用。当参考与稿件开头重合时，continuation 容易跳过开头，必须另查。`max_tokens` 默认6500，可按已安装模型能力显式设置；这只是上限，不能证明实际生成完整。生成后检查实际时长、全文、句尾、漏读和重复，再按[连续旁白约定](continuous-narration.md)制作 alignment，最后编排画面。
+先检查原片参考本身是否混有配乐、风声、底噪。清理会伤及音色，不能只凭门禁或 ASR 判定合格。指定原片音色先做同文对照与另一段正文短样，再做完整旁白；按相近响度比较原片、清理后原声、合成短样与长段开头/中间/结尾。未实际听音或没有用户反馈时，状态保持待听感验收，不能宣称音色一致或绝对无杂音。
 
 ## 六款手、仅画笔与广告
 
@@ -57,15 +65,3 @@ python scripts/voxcpm_voice.py JOB
 ## 图像隐私
 
 执行 `python3 scripts/clean_image.py image.png --audit privacy.json`：纯 Python 重写 PNG / JPEG / WebP 容器，只保留图像数据块（像素不重新编码，替换前核对像素一致），去除 EXIF、GPS、XMP、IPTC、ICC、文本注释与 C2PA 等字段，清除 macOS 来源扩展属性与 Linux `user.*` 属性，不写入模拟相机字段。不需要 Bun 或 ExifTool；结果与旧流程（随包 `main.ts` + `exiftool -all=`）逐字节一致，审计格式不变。其他格式保持原样并报错，提示先转为 PNG、JPEG 或 WebP。
-
-## 原片音色与纯旁白验收
-
-先检查原片参考本身是否混有配乐、风声、底噪。必要时人声分离或降噪，保留原始输入、处理参数及前后哈希；降噪可能伤及音色，不能仅凭残差小或 ASR 完整通过。参考导入后音频或逐字稿改变必须重新导入；生成记录保存实际参考路径、哈希、模式与全部参数。
-
-指定原片音色先做同文对照与另一段正文短样，再做完整连续旁白。按相近响度比较原片、清理后原声、合成短样与长段开头/中间/结尾。用户未认可的合成试听不能替代原片，也不能标成已验证的主力音色。无背景音乐只证明没有额外混音层；旁白本身的底噪、嗡声、合成伪影与漏字须单独检查。未实际听音或没有用户听感反馈时，状态保持待听感验收，不允许用信号指标、ASR 或文件可播放宣称音色一致或绝对无杂音。
-
-## 本机主力音色
-
-个人声音目录位于 `~/.local/share/sweety-handdraw-video/voices/catalog.json`，与可分发 Skill 包分开。该目录保留用户明确指定的参考及其实际验收状态；暂用声音不得记为最终听感通过。`default` 表示本机主力音色。声音选择默认方案优先采用 `load_voices` 返回的 `preferred: true` 项，用户明确选择与任务内导入优先。目录中记录实际参考、逐字稿、哈希、清理过程、试听样本和验收范围，未经验收的参数不得沿用“已通过”标记。原片录音不放入公共包。
-
-已验收配置可包含 `enhancement_model_path`，仅指向已经安装的本地 DeepFilterNet3 模型。适配器将其权重哈希纳入生成缓存，48kHz 后处理必须保持样本数；不自动下载模型。处理本身不会设置听感通过，新生成的正文仍需验收。

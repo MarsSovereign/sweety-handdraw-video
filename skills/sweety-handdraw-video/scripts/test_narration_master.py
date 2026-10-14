@@ -98,7 +98,7 @@ class NarrationMasterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_anchors(anchors)
 
-    def test_tts_receives_complete_script_once(self):
+    def test_generation_target_contains_closing_and_stays_in_job(self):
         target, text = generation_target(self.root, self.manifest)
         self.assertEqual(target, self.root/'master.wav')
         self.assertEqual(text, '前一句。后一句。')
