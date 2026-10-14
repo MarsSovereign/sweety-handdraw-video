@@ -53,14 +53,19 @@ def group_beats(beat_ids, group):
     return beat_ids[first:last + 1]
 
 
+STROKES_PER_SECOND = 3.5  # measured draw-v2 pace at the cap: contour strokes, pen lifts and marker color included
+
+
 def tier(seconds, hold):
+    strokes = max(3, int(seconds * STROKES_PER_SECOND))
     if seconds < 3:
-        return 'label or tiny icon: under 20 strokes'
+        return f'label or tiny icon: at most ~{strokes} strokes'
     if seconds < 6:
-        return 'simple icon/silhouette: about 20-40 strokes, flat fills'
+        return f'simple icon/silhouette: at most ~{strokes} strokes, flat fills'
     if seconds <= hold:
-        return 'one subject: about 40-80 strokes, flat fills, no texture'
-    return 'scene with background (declare background; each semantic part paces the drawing) or split into two visuals'
+        return f'one subject: at most ~{strokes} strokes, flat fills, no texture lines'
+    return (f'at most ~{strokes} strokes: a scene with background (declare background; each semantic part paces the drawing) '
+            'or split into two visuals')
 
 
 def spans(board, beats):
