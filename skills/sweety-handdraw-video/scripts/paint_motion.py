@@ -150,7 +150,7 @@ def plan(regions, scale):
     for region in regions:
         largest[region['part']] = max(largest.get(region['part'], 0), region['area'])
     for region in regions:
-        region['radius'] = float(np.clip(math.sqrt(region['area']) / 7, 7, 24) * scale)
+        region['radius'] = float(np.clip(math.sqrt(region['area']) / 7, 7, 24) * scale * region.get('brush', 1.))
         small = hurried and region['area'] < SMALL_REGION and region['area'] < largest[region['part']]
         region['cells'] = [] if small else zigzag(region, region['radius'])
 

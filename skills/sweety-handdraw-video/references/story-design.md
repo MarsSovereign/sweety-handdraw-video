@@ -69,7 +69,7 @@
 
 标题和短标签承担导航，口播承担完整论述。避免正文把整段字幕再抄一次。页面可以累积多个相关元素，待一个完整意思讲完再转场；图文位置、数量和比例应随内容变化。
 
-**一眼认得出。** 主体按观众认识它的方式画：葡萄靠一串果和藤叶被认出，一颗放大的烂葡萄会被看成无花果或李子。drawing-plan 的每个 subject 写 `identity_cues`；出图后运行 `python3 scripts/drawing_contract.py JOB --thumbnails`，看编号缩略图（160px、无字幕），1秒内叫不出名字就重画，结论写进 drawing-review 的 `recognizability`。
+**一眼认得出。** 主体按观众认识它的方式画：葡萄靠一串果和藤叶被认出，一颗放大的烂葡萄会被看成无花果或李子。drawing-plan 的每个 subject 写 `identity_cues`；出图后运行 `python3 scripts/drawing_contract.py JOB --thumbnails`，看编号缩略图（160px、无字幕），1秒内叫不出名字就重画，结论写进 drawing-review 的 `recognizability`。同时看有没有两格读起来是同一幅画（同一图集里换了裁切的相似小图也算）：脚本只能拦同图同裁切的连用，这种重复要模型自己发现，换图或给后一个镜头写 `callback` 理由。
 
 ## 生成素材
 

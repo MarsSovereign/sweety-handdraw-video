@@ -345,7 +345,7 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
     # One region per part: the brush follows the part, not the palette of a painted surface.
     regions = paint_motion.color_regions(rgb, visible, owners_everywhere, len(names), np.ones(shape, np.int32))
     for region in regions:
-        region.update(tilt=.6, soft=.6)
+        region.update(tilt=.35, soft=.6, brush=2.5)
     ys, xs = np.nonzero(visible)
     tip = np.array([xs.mean(), ys.min()], dtype=float)
     fill = paint_motion.requirements(regions, rgb, len(names), tip, speed, FPS, shade=False)

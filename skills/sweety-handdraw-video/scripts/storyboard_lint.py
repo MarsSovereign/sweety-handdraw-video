@@ -273,10 +273,12 @@ def drawing_time(timeline):
                 continue
             window, label = event['end'] - event['start'], event.get('visual') or event['asset']
             if window < measured.get('minimum_seconds', 0):
-                errors.append(f'{label}: {window:.1f}s drawing window but the image needs at least {measured["minimum_seconds"]:.1f}s '
-                              f'({measured.get("stroke_count")} strokes); simplify the image or extend its window across beats with a page visual group')
+                strokes = f' ({measured["stroke_count"]} strokes)' if measured.get('stroke_count') else ''
+                errors.append(f'{label}: {window:.1f}s drawing window but the image needs at least {measured["minimum_seconds"]:.1f}s{strokes}; '
+                              'simplify the image or extend its window across beats with a page visual group')
             elif window < measured.get('required_seconds', 0):
-                warnings.append(f'{label}: {window:.1f}s window < {measured["required_seconds"]:.1f}s for full detail; minor strokes will fade in')
+                effect = 'minor strokes will fade in' if measured.get('stroke_count') else 'the brush sweeps faster than a relaxed pace'
+                warnings.append(f'{label}: {window:.1f}s window < {measured["required_seconds"]:.1f}s for full detail; {effect}')
     return errors, warnings
 
 
