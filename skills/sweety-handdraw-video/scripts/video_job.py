@@ -74,21 +74,21 @@ def inspect_environment(job_directory):
     except (ValueError, FileNotFoundError) as error:
         report['font_error'] = str(error)
     inputs = [manifest.get('cover', {}).get('source')]
+    audio = [manifest['narration'].get(key) for key in ('source', 'alignment')] if manifest.get('narration') else []
     for page in manifest['pages']:
         for beat in page['beats']:
             if not manifest.get('narration'):
-                inputs.append(beat.get('audio'))
+                audio.append(beat.get('audio'))
             inputs.extend(action.get('source') for action in beat.get('actions',[]) if action['type'] == 'illustration')
-    if manifest.get('narration'):
-        inputs.extend(manifest['narration'].get(key) for key in ('source', 'alignment'))
     for page in manifest['pages']:
         for group in page.get('visual_groups', []):
             inputs.extend(action.get('source') for action in group['actions'] if action['type']=='illustration')
     if manifest.get('hand', {}).get('source'):
         inputs.append(manifest['hand']['source'])
-    for value in inputs:
+    for value in inputs + audio:
         if not value or not resolve_input(root, value).is_file():
             report['missing_inputs'].append(value)
+    visuals_missing = any(not value or not resolve_input(root, value).is_file() for value in inputs)
     try:
         report['art_direction']=verify_art_direction(root,manifest)
     except (ValueError,FileNotFoundError,KeyError) as error:
@@ -115,9 +115,10 @@ def inspect_environment(job_directory):
     elif not manifest.get('runtime_fixture'):
         report['narration_error'] = 'Production requires a complete narration master and alignment'
         report['narration_files_available'] = False
-    report['ready'] = all(report['tools'].values()) and not report['missing_inputs'] and 'font_error' not in report and 'art_direction_error' not in report and report['narration_files_available']
+    renderable = all(report['tools'].values()) and not visuals_missing and 'font_error' not in report and 'art_direction_error' not in report
+    report['ready'] = renderable and not report['missing_inputs'] and report['narration_files_available']
     report['capabilities'] = {
-        'render': report['ready'],
+        'render': renderable,
         'generate_narration': report.get('voice_studio', {}).get('available', False) or report.get('voxcpm', {}).get('model_installed', False),
         'narration_ready': report['narration_files_available'],
         'generate_images': 'host-dependent: not detectable by scripts'}

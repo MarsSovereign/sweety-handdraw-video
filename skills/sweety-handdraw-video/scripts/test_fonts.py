@@ -85,6 +85,14 @@ class FontCoverageTests(unittest.TestCase):
         self.assertFalse(report['ready'])
         self.assertIn('犇', report['font_error'])
         self.assertTrue(any(line.startswith('Fonts:') for line in report['fixes']))
+        manifest['captions']['font']['path'] = self.full
+        (self.root/'job.json').write_text(json.dumps(manifest, ensure_ascii=False))
+        report = inspect_environment(self.root)  # narration missing must not hide that rendering itself is possible
+        self.assertEqual(report['missing_inputs'], ['a.wav'])
+        self.assertEqual(report['capabilities']['render'], all(report['tools'].values()))
+        self.assertFalse(report['capabilities']['narration_ready'])
+        self.assertFalse(report['ready'])
+        self.assertTrue(any(line.startswith('Narration:') for line in report['fixes']))
 
     def test_rare_characters_resolve_with_installed_system_fonts(self):
         manifest = {'pages': [{'beats': [{'text': RARE, 'actions': [{'type': 'text', 'text': RARE}]}]}],

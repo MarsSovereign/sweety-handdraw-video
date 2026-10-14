@@ -16,9 +16,9 @@ Skill 目录：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`；Codex 
 
 | 字段 | 含义 |
 |---|---|
-| `capabilities.render` | Python 依赖、FFmpeg、字体覆盖与输入均就绪，可以渲染 |
+| `capabilities.render` | FFmpeg、字体覆盖、画面输入与美术记录均就绪，可以渲染画面（不看旁白） |
 | `capabilities.generate_narration` | 本地 VoxCPM2 模型已安装，或 VoiceStudio 可连通 |
-| `capabilities.narration_ready` | 旁白音频与对齐文件已就绪 |
+| `capabilities.narration_ready` | 旁白音频与对齐文件已就绪；与 `render` 同时为真时 `ready` 才为真 |
 | `capabilities.generate_images` | 脚本无法探测宿主是否能生图，只给提示，由 Agent 自行确认 |
 | `fonts` | 手写、字幕、水印各自选中的字体，或缺字说明 |
 | `fixes` | 缺失项对应的安装或配置命令 |
