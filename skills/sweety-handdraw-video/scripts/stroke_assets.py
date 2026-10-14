@@ -376,7 +376,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     total = float(seconds) if seconds else float(np.clip(lines['required'] + fill['required'] + ramp, 1, 30))
     sketches, segments, cursor = (line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []), [], 0.
     if sketches:
-        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.LINE_SPEED * line_drawing.SPEED_FACTOR * 1.6 * speed))) for stroke in sketches]
+        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed, FPS) * 1.6))) for stroke in sketches]
         factor = min(1., min(1.5, .12 * total) / (sum(each) + .1 * len(each)))
         for index, (stroke, length) in enumerate(zip(sketches, each)):
             length = max(2. / FPS, length * factor)
@@ -434,7 +434,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
             segment['start'], segment['end'] = segment['start'] / ending, segment['end'] / ending
         line_parts = [[value / ending for value in part] for part in line_parts]
         fill_parts = [[value / ending for value in part] for part in fill_parts]
-    final = illustration_layers.compose(illustration_layers.prepare(maps, line_layer, paint_layer, shade_pixels, sketch_layer), np.float32(1e9))
+    final = illustration_layers.prepare(maps, line_layer, paint_layer, shade_pixels, sketch_layer)['final']
     owners_final = np.where(final[:, :, 3] > 0, owners_everywhere, -1).astype(np.int16)
     for suffix, layer in (('line', line_layer), ('paint', paint_layer), ('shade', shade_pixels), ('sketch', sketch_layer)):
         if layer is not None:
@@ -447,7 +447,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     drawability = {'line_length_px': round(sum(stroke['length'] for stroke in strokes)), 'stroke_count': len(strokes),
                    'drawn_stroke_count': line_counts['drawn_stroke_count'], 'faded_stroke_count': line_counts['faded_stroke_count'],
                    'fill_area_px': int(painted.sum()), 'required_seconds': round(lines['required'] + fill['required'] + ramp, 2),
-                   'minimum_seconds': round(lines['minimum'] + fill['minimum'], 2), 'lineart_gate': gate}
+                   'minimum_seconds': round(lines['all_at_cap'] + fill['minimum'] + ramp, 2), 'lineart_gate': gate}
     metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'source': str(source_path), 'width': artwork.width,
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports,
                 'layers': ['paint', 'shade'] + (['sketch'] if sketches else []) + ['line'],

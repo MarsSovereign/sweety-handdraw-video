@@ -3,7 +3,7 @@ region's principal axis (rounded turns, no lift inside a region), then a few bro
 import math
 import numpy as np
 from scipy import ndimage
-from line_drawing import lift_seconds, weighted_lengths
+from line_drawing import FRAME_PX, lift_seconds, weighted_lengths
 
 FILL_SPEED = 700.     # px/s of marker travel for a person coloring at 1080p
 SHADE_SECONDS = .35   # per shaded part, at human pace
@@ -208,13 +208,18 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
     return segments, parts, bands, cursor, tip
 
 
+def fill_cap(speed, fps):
+    return min(FILL_SPEED * FILL_FACTOR, FRAME_PX * fps) * speed
+
+
 def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
     """Seconds for: base marker at human pace with shading; a 1.5x marker at the cap with shading;
     the broadest marker at the cap with short lifts and no shading."""
     shading = shaded_parts(regions, rgb, part_count)
     result = {}
-    for key, scale, pace, shade, lifts in (('required', SCALES[0], FILL_SPEED * speed, shading, 1.), ('moderate', SCALES[1], FILL_SPEED * speed * FILL_FACTOR, shading, 1.),
-                                           ('minimum', SCALES[-1], FILL_SPEED * speed * FILL_FACTOR, [], .5)):
+    cap = fill_cap(speed, fps)
+    for key, scale, pace, shade, lifts in (('required', SCALES[0], FILL_SPEED * speed, shading, 1.), ('moderate', SCALES[1], cap, shading, 1.),
+                                           ('minimum', SCALES[-1], cap, [], .5)):
         plan(regions, scale)
         result[key] = timeline(regions, shade, part_count, tip, pace, lifts, fps=fps)[3]
     return result
@@ -225,7 +230,7 @@ def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=
     up to the cap; shading is dropped before the cap is exceeded. Returns segments, per-part [start, end]
     fractions, shading bands, end fraction, pen tip and counts."""
     shading = shaded_parts(regions, rgb, part_count)
-    base, cap = FILL_SPEED * speed, FILL_SPEED * speed * FILL_FACTOR
+    base, cap = FILL_SPEED * speed, fill_cap(speed, fps)
     seconds = lambda pace, lifts=1., shade=None: timeline(regions, shading if shade is None else shade, part_count, tip, pace, lifts, fps=fps)[3]
     for scale in SCALES:
         plan(regions, scale)
@@ -233,7 +238,7 @@ def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=
             break
     if seconds(cap) > budget:
         shading = []
-    lifts = next((value for value in (1., .7, .5) if seconds(cap * 8, value) <= budget), .5)
+    lifts = next((value for value in (1., .7, .5) if seconds(cap, value) <= budget), .5)
     low, high = base / 1.6, cap * 8
     if seconds(low, lifts) <= budget:
         high = low

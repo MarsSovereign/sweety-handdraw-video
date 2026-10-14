@@ -28,6 +28,15 @@ def prepare(maps, line, paint, shade, sketch=None):
         sketch = as_float(sketch)
         layers.update(sketch_rgb=sketch[..., :3], sketch_alpha=sketch[..., 3], sketch=np.asarray(maps['sketch'], np.float32),
                       sketch_fade=tuple(float(value) for value in maps['sketch_fade']))
+    # Per-pixel first change and settle time: frames only recompute the pixels in between.
+    finite = lambda values: np.where(np.isfinite(values), values, -np.inf)
+    times = [layers['ink'], layers['color']] + ([layers['sketch']] if sketch is not None else [])
+    layers['start'] = np.minimum.reduce(times)
+    settle = [finite(layers['ink'] + layers['ink_ramp']), finite(layers['full']), finite(layers['shade'] + layers['shade_ramp'])]
+    if sketch is not None:
+        settle.append(np.where(np.isfinite(layers['sketch']), sum(layers['sketch_fade']), -np.inf).astype(np.float32))
+    layers['settle'] = np.maximum.reduce(settle)
+    layers['final'] = blend(layers, np.float32(1e30))
     return layers
 
 
@@ -39,15 +48,27 @@ def load(directory, name):
     return prepare(maps, image('line'), image('paint'), image('shade'), sketch)
 
 
-def compose(layers, progress):
-    """RGBA uint8 frame of the illustration at this fraction of its drawing event."""
-    paint = np.where(progress >= layers['full'], 1., np.where(progress >= layers['color'], layers['cover'], 0.)) * layers['alpha']
-    blend = np.clip((progress - layers['shade']) / layers['shade_ramp'], 0, 1)[..., None]
-    rgb, alpha = layers['flat'] + (layers['shade_rgb'] - layers['flat']) * blend, paint.astype(np.float32)
+def blend(layers, progress, where=Ellipsis):
+    """RGBA uint8 of the selected pixels at this fraction of the drawing event."""
+    pick = lambda key: layers[key][where]
+    paint = np.where(progress >= pick('full'), 1., np.where(progress >= pick('color'), pick('cover'), 0.)) * pick('alpha')
+    mix = np.clip((progress - pick('shade')) / layers['shade_ramp'], 0, 1)[..., None]
+    flat = pick('flat')
+    rgb, alpha = flat + (pick('shade_rgb') - flat) * mix, paint.astype(np.float32)
     if 'sketch' in layers:
         start, length = layers['sketch_fade']
-        visible = layers['sketch_alpha'] * np.clip((progress - layers['sketch']) * SHARP, 0, 1) * (1 - np.clip((progress - start) / length, 0, 1))
-        rgb, alpha = over(layers['sketch_rgb'], visible, rgb, alpha)
-    ink = layers['line_alpha'] * np.clip((progress - layers['ink']) / layers['ink_ramp'], 0, 1)
-    rgb, alpha = over(layers['line_rgb'], ink, rgb, alpha)
-    return np.dstack([np.rint(np.clip(rgb, 0, 1) * 255), np.rint(np.clip(alpha, 0, 1) * 255)]).astype(np.uint8)
+        visible = pick('sketch_alpha') * np.clip((progress - pick('sketch')) * SHARP, 0, 1) * (1 - np.clip((progress - start) / length, 0, 1))
+        rgb, alpha = over(pick('sketch_rgb'), visible, rgb, alpha)
+    ink = pick('line_alpha') * np.clip((progress - pick('ink')) / pick('ink_ramp'), 0, 1)
+    rgb, alpha = over(pick('line_rgb'), ink, rgb, alpha)
+    return np.concatenate([np.rint(np.clip(rgb, 0, 1) * 255), np.rint(np.clip(alpha, 0, 1) * 255)[..., None]], -1).astype(np.uint8)
+
+
+def compose(layers, progress):
+    """RGBA uint8 frame of the illustration at this fraction of its drawing event."""
+    progress = np.float32(progress)
+    frame = np.where((progress >= layers['settle'])[..., None], layers['final'], np.uint8(0))
+    active = (layers['start'] <= progress) & (progress < layers['settle'])
+    if active.any():
+        frame[active] = blend(layers, progress, active)
+    return frame

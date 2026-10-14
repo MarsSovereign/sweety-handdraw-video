@@ -9,6 +9,7 @@ from stroke_paths import calculate_lengths
 
 LINE_SPEED = 420.     # px/s along curvature-weighted length: a person inking a confident contour at 1080p
 SPEED_FACTOR = 4.     # calibrated cap: speed-drawing videos run 4-8x life and still read as human when the order is coherent
+FRAME_PX = 80.        # most a pen or marker may move in one frame and still read as continuous motion
 DETAIL_BOOST = 1.6    # low-priority details may run this much faster than the main strokes under pressure
 FADE_SECONDS = .3
 REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than draw a line upward or leftward
@@ -31,10 +32,15 @@ def weighted_lengths(points):
     return np.r_[0., np.cumsum(np.linalg.norm(steps, axis=1) * (1 + 1.5 * np.clip(turn / (np.pi / 8), 0, 1)))]
 
 
+def line_cap(speed, fps):
+    """Mean nib speed cap: 4x human pace, with the min-jerk peak (1.875x mean) inside FRAME_PX per frame."""
+    return min(LINE_SPEED * SPEED_FACTOR, FRAME_PX * fps / 1.875) * speed
+
+
 def lift_seconds(distance, fps=30, scale=1.):
     """Pen-up time: 80-150 ms, never so short that the renderer's lifted move (75% of it in min-jerk motion,
     peak 1.875x mean) exceeds 80 px per frame."""
-    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (.75 * 80. * fps))
+    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (.75 * FRAME_PX * fps))
 
 
 def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
@@ -145,36 +151,41 @@ def requirements(strokes, part_count, tip, speed, fps):
     every = [dict(stroke, fade=False, tier=min(stroke['tier'], DETAIL)) for stroke in strokes]
     drawable = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] != TEXTURE]
     essential = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] in (SILHOUETTE, KEY)]
-    cap = LINE_SPEED * speed * SPEED_FACTOR
+    cap = line_cap(speed, fps)
+    # A part whose strokes are all faded still takes FADE_SECONDS to materialise.
+    fades = lambda kept: FADE_SECONDS * len({stroke['part'] for stroke in strokes} - {stroke['part'] for stroke in kept})
     return {'required': line_seconds(order(every, part_count, tip)[0], LINE_SPEED * speed, fps),
-            'all_at_cap': line_seconds(order(drawable, part_count, tip)[0], cap, fps, cap * DETAIL_BOOST),
-            'minimum': line_seconds(order(essential, part_count, tip)[0], cap, fps)}
+            'all_at_cap': line_seconds(order(drawable, part_count, tip)[0], cap, fps, cap * DETAIL_BOOST) + fades(drawable),
+            'minimum': line_seconds(order(essential, part_count, tip)[0], cap, fps) + fades(essential)}
 
 
 def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
     """Fit the strokes into budget seconds. Returns ordered drawn strokes with times (fractions of total),
     segments, per-part [start, end] fractions and counts."""
-    base, cap = LINE_SPEED * speed, LINE_SPEED * speed * SPEED_FACTOR
+    base, cap = LINE_SPEED * speed, line_cap(speed, fps)
     for stroke in strokes:
         stroke['fade'] = stroke['tier'] == TEXTURE
     ordered, _ = order(strokes, part_count, tip)
+    parts_with_strokes = {stroke['part'] for stroke in strokes}
+    # Seconds at this pace, including the soft materialisation of parts left with no drawn stroke.
+    seconds = lambda pace, detail=None: line_seconds(ordered, pace, fps, detail) + FADE_SECONDS * len(parts_with_strokes - {s['part'] for s in ordered})
     demotable = sorted([stroke for stroke in ordered if stroke['tier'] in (STRUCTURE, DETAIL)], key=lambda s: (-s['tier'], s['length']))
-    while demotable and line_seconds(ordered, cap, fps, cap * DETAIL_BOOST) > budget:
+    while demotable and seconds(cap, cap * DETAIL_BOOST) > budget:
         chunk = demotable[:max(1, len(demotable) // 12)]
         demotable = demotable[len(chunk):]
         for stroke in chunk:
             stroke['fade'] = True
         ordered, _ = order(strokes, part_count, tip)
     low, high = base, cap
-    if line_seconds(ordered, base, fps) <= budget:
-        speed_used = max(base / 1.6, base * line_seconds(ordered, base, fps) / max(budget, 1e-6))
+    if seconds(base) <= budget:
+        speed_used = max(base / 1.6, base * seconds(base) / max(budget, 1e-6))
     else:
-        if line_seconds(ordered, cap, fps, cap * DETAIL_BOOST) > budget:
+        if seconds(cap, cap * DETAIL_BOOST) > budget:
             high = cap * 64
         for _ in range(48):
             middle = (low + high) / 2
             pressure = min(1., (middle - base) / max(1e-6, cap - base))
-            if line_seconds(ordered, middle, fps, middle * (1 + (DETAIL_BOOST - 1) * pressure)) > budget:
+            if seconds(middle, middle * (1 + (DETAIL_BOOST - 1) * pressure)) > budget:
                 low = middle
             else:
                 high = middle
