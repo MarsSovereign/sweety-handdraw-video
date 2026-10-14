@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 from paint_motion import build_painting
+import handwriting
 
 import stroke_paths as stroke_utils
 
@@ -127,8 +128,18 @@ def measure_text(text, font, margin=5):
             'origin': [margin-left, margin-top], 'placements': placements}
 
 
-def build_text(name, text, size, color='#302C26', seconds=None):
+def build_text(name, text, size, color='#302C26', seconds=None, stroke_order=True):
     font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
+    line = handwriting.build_line(text, font, size, color, seconds, FPS) if stroke_order else None
+    if line is not None:
+        pixels, reveal, owners, segments, characters, origin, report = line
+        metadata = save_asset(name,pixels,reveal,segments,{'type':'handwritten_text','text':text,'font_size':size,
+                              'text_origin':origin,'safe_margin':5,'characters':characters,'handwriting':report})
+        np.savez_compressed(ASSET_DIRECTORY / f'{name}.npz', reveal=reveal, owners=owners)
+        return metadata
+    # Whole-line font fallback keeps one consistent look when any ideograph lacks stroke data.
+    missing = [character for character in text if handwriting.is_hanzi(character) and handwriting.character_data(character) is None]
+    report = {'mode':'font','reason':'missing stroke data: '+''.join(dict.fromkeys(missing)) if missing else 'stroke order disabled'}
     layout = measure_text(text, font)
     width, height = layout['width'], layout['height']
     layer = Image.new('RGBA',(width,height))
@@ -138,7 +149,7 @@ def build_text(name, text, size, color='#302C26', seconds=None):
         glyph_draw = ImageDraw.Draw(glyph)
         glyph_draw.text((-bounds[0],-bounds[1]),character,font=font,fill=255)
         mask = np.array(glyph) > 30
-        paths = ordered_paths(mask)
+        paths = [handwriting.orient(path) for path in ordered_paths(mask)]
         left = layout['origin'][0]+offset+bounds[0]
         top = layout['origin'][1]+bounds[1]
         glyphs.append((character, left, top, np.array(glyph), paths))
@@ -167,7 +178,7 @@ def build_text(name, text, size, color='#302C26', seconds=None):
         character_intervals.append({'index':index,'character':character,'start':cursor,'end':cursor+interval})
         cursor += interval
     metadata = save_asset(name,pixels,reveal,segments,{'type':'handwritten_text','text':text,'font_size':size,
-                          'text_origin':layout['origin'],'safe_margin':5,'characters':character_intervals})
+                          'text_origin':layout['origin'],'safe_margin':5,'characters':character_intervals,'handwriting':report})
     np.savez_compressed(ASSET_DIRECTORY / f'{name}.npz', reveal=reveal, owners=owners)
     return metadata
 
