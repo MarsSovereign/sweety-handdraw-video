@@ -97,6 +97,11 @@ def zigzag(region, radius):
     ys, xs = np.nonzero(region['mask'])
     points = np.c_[xs, ys].astype(float) + region['offset']
     center, axis, across = axes(points)
+    if region.get('tilt'):
+        # A brush sweeping a painting runs on a slant, so the revealed edge is not a scanline.
+        cosine, sine = math.cos(region['tilt']), math.sin(region['tilt'])
+        axis = np.array([cosine * axis[0] - sine * axis[1], sine * axis[0] + cosine * axis[1]])
+        across = np.array([-axis[1], axis[0]])
     along_values, across_values = (points - center) @ axis, (points - center) @ across
     spacing = 1.25 * radius
     rows = []
@@ -219,10 +224,10 @@ def fill_cap(speed, fps):
     return min(FILL_SPEED * FILL_FACTOR, FILL_FRAME_PX * fps) * speed
 
 
-def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
+def requirements(regions, rgb, part_count, tip, speed=1., fps=30, shade=True):
     """Seconds for: base marker at human pace with shading; a 1.5x marker at the cap with shading;
     the broadest marker at the cap with short lifts and no shading."""
-    shading = shaded_parts(regions, rgb, part_count)
+    shading = shaded_parts(regions, rgb, part_count) if shade else []
     result = {}
     cap = fill_cap(speed, fps)
     for key, scale, pace, shade, lifts in (('required', SCALES[0], FILL_SPEED * speed, shading, 1.), ('moderate', SCALES[1], cap, shading, 1.),
@@ -232,11 +237,11 @@ def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
     return result
 
 
-def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=30):
+def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=30, shade=True):
     """Pick marker size, pace and lift length so the fill fits the budget: bigger marker first, then pace
     up to the cap; shading is dropped before the cap is exceeded. Returns segments, per-part [start, end]
     fractions, shading bands, end fraction, pen tip and counts."""
-    shading = shaded_parts(regions, rgb, part_count)
+    shading = shaded_parts(regions, rgb, part_count) if shade else []
     base, cap = FILL_SPEED * speed, fill_cap(speed, fps)
     seconds = lambda pace, lifts=1., shade=None: timeline(regions, shading if shade is None else shade, part_count, tip, pace, lifts, fps=fps)[3]
     for scale in SCALES:
@@ -272,6 +277,7 @@ def render(shape, regions, bands, owners):
     for region in regions:
         (left, top), (height, width) = region['offset'], region['mask'].shape
         mask, radius = region['mask'], region['radius']
+        edge = max(4., region.get('soft', 0.) * radius)
         box = (slice(top, top + height), slice(left, left + width))
         flat[box][mask] = region['flat']
         first_local, cover_local, full_local, grain_local = first[box], cover[box], full[box], grain[box]
@@ -283,7 +289,7 @@ def render(shape, regions, bands, owners):
                     continue
                 ys, xs = np.ogrid[y0:y1, x0:x1]
                 window = (slice(y0, y1), slice(x0, x1))
-                coverage = np.clip((radius + 2 - np.hypot(xs - x, ys - y)) / 4, 0, 1) * mask[window]
+                coverage = np.clip((radius + 2 - np.hypot(xs - x, ys - y)) / edge, 0, 1) * mask[window]
                 touched = (coverage > .1) & ~np.isfinite(first_local[window])
                 first_local[window][touched] = when
                 passing = (coverage > 0) & (when - first_local[window] <= region['window'])

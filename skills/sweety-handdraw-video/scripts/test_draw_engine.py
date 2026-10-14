@@ -110,6 +110,29 @@ class DrawEngineTests(unittest.TestCase):
         outline = stroke_assets.prepare_artwork(source, 300, 300)['outline']
         self.assertFalse(lineart_gate.evaluate(outline)['passed'])
 
+    def test_reveal_mode_paints_the_source_part_by_part_without_lines(self):
+        # Styles without ink outlines: the line-art gate does not apply and the brush shows the finished picture.
+        source = self.directory / 'texture.png'
+        texture(source)
+        halves = [{'id': 'top', 'polygon': [[0, 0], [1, 0], [1, .5], [0, .5]]}, {'id': 'bottom', 'polygon': [[0, .5], [1, .5], [1, 1], [0, 1]]}]
+        with self.assertRaisesRegex(ValueError, 'drawing.mode'):
+            stroke_assets.build_illustration('texture', source, 300, 300, parts=halves, seconds=3, drawing={'mode': 'wipe'})
+        metadata = stroke_assets.build_illustration('texture', source, 300, 300, parts=halves, seconds=3, drawing={'mode': 'reveal'})
+        self.assertEqual(metadata['mode'], 'reveal')
+        self.assertEqual(set(metadata['drawability']), DRAWABILITY)
+        self.assertEqual(metadata['drawability']['stroke_count'], 0)
+        self.assertLessEqual(metadata['drawability']['minimum_seconds'], 3)
+        self.assertFalse(any(segment['kind'] == 'ink' for segment in metadata['segments']))
+        top, bottom = metadata['parts']
+        self.assertLessEqual(top['fill_end'], bottom['fill_start'] + 1e-6)
+        layers = illustration_layers.load(self.directory, 'texture')
+        final = np.array(Image.open(self.directory / 'texture.png'))
+        np.testing.assert_array_equal(illustration_layers.compose(layers, 1.), final)
+        np.testing.assert_array_equal(final[:, :, :3][final[:, :, 3] == 255], np.array(Image.open(source))[:, :, :3][final[:, :, 3] == 255])
+        middle = illustration_layers.compose(layers, top['fill_end'])[:, :, 3]
+        self.assertGreater(np.count_nonzero(middle[:140]), .8 * np.count_nonzero(final[:140, :, 3]))
+        self.assertEqual(np.count_nonzero(middle[160:]), 0)
+
     def test_region_marks_assign_whole_regions_to_parts(self):
         source = self.directory / 'figure.png'
         figure(source)

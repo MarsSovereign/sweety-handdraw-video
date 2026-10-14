@@ -67,7 +67,8 @@ def main():
             {'id': 'b', 'text': '小色块和纯线稿都需要完整绘制。', 'audio': 'inputs/beat-1.wav', 'actions': [
                 {'type': 'illustration', 'parts': [{'id': 'object', 'polygon': [[0,0],[1,0],[1,1],[0,1]]}], 'source': 'inputs/tiny-color.png', 'outline_mask':'inputs/tiny-outline.png', 'x': 580, 'y': 170, 'width': 7, 'height': 7},
                 {'type': 'illustration', 'parts': [{'id': 'object', 'polygon': [[0,0],[1,0],[1,1],[0,1]]}], 'source': 'inputs/ink-only.png', 'x': 650, 'y': 190, 'width': 100, 'height': 60},
-                {'type': 'marker', 'style': 'circle', 'x': 540, 'y': 110, 'width': 300, 'height': 220, 'weight': .4}]}]},
+                {'type': 'marker', 'style': 'circle', 'x': 540, 'y': 110, 'width': 300, 'height': 220, 'weight': .4},
+                {'type': 'illustration', 'drawing': {'mode': 'reveal'}, 'parts': [{'id': 'object', 'polygon': [[0,0],[1,0],[1,1],[0,1]]}], 'source': 'inputs/icon.png', 'x': 760, 'y': 330, 'width': 160, 'height': 130}]}]},
             {'beats': [{'id': 'c', 'text': '换页后，时间由实际音频决定。' + rare, 'audio': 'inputs/beat-2.wav', 'actions': [
                 {'type': 'text', 'text': '第二页' + rare, 'x': 140, 'y': 120, 'size': 50},
                 {'type': 'marker', 'style': 'underline', 'x': 140, 'y': 190, 'width': 360, 'height': 20, 'weight': .3}]}]}]}
@@ -99,7 +100,7 @@ def main():
         raise AssertionError('Rare characters were dropped from the captions')
     report = {'status': 'offline_runtime_checks_passed', 'fixture_only': True, 'visual_acceptance_claimed': False, 'rare_glyphs': rare,
         'checks': ['variable pages and beat counts', 'actual-audio timing', '960x540 at 24fps',
-                   'Chinese stroke tips and punctuation', 'tiny isolated color patch', 'ink-only artwork',
+                   'Chinese stroke tips and punctuation', 'tiny isolated color patch', 'ink-only artwork', 'reveal-mode illustration',
                    'full H264/AAC decode', 'runtime fixtures cannot be delivered', 'changed manifest blocks old verification',
                    'stage timing records'] + (['rare glyph coverage'] if rare else [])}
     (root / 'smoke-result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))

@@ -335,6 +335,53 @@ def region_owners(region_map_path, part_regions, alpha, source_path):
     return names, owners, labels
 
 
+def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, ownership):
+    """Reveal mode for styles without ink outlines (watercolor, gouache, paper cut, pixel...): part by part the hand
+    sweeps a broad soft brush and the finished picture shows only where it has passed. No line layer, no shading pass."""
+    shape = alpha.shape
+    _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
+    owners_everywhere = owners[nearest[0], nearest[1]]
+    visible, rgb = alpha > 0, pixels[:, :, :3].astype(float)
+    # One region per part: the brush follows the part, not the palette of a painted surface.
+    regions = paint_motion.color_regions(rgb, visible, owners_everywhere, len(names), np.ones(shape, np.int32))
+    for region in regions:
+        region.update(tilt=.6, soft=.6)
+    ys, xs = np.nonzero(visible)
+    tip = np.array([xs.mean(), ys.min()], dtype=float)
+    fill = paint_motion.requirements(regions, rgb, len(names), tip, speed, FPS, shade=False)
+    total = float(seconds) if seconds else float(np.clip(fill['required'], 1, 30))
+    segments, fill_parts, _, _, _, counts = paint_motion.schedule(regions, rgb, len(names), tip, total, 0., total, speed, FPS, shade=False)
+    first, cover, full, _, _ = paint_motion.render(shape, regions, [], owners_everywhere)
+    ending = float(max([segment['end'] for segment in segments] + [full[np.isfinite(full)].max(initial=0.)]))
+    if ending > 1:
+        first, full = first / ending, full / ending
+        for segment in segments:
+            segment['start'], segment['end'] = segment['start'] / ending, segment['end'] / ending
+        fill_parts = [[value / ending for value in part] for part in fill_parts]
+    never = np.full(shape, np.inf, np.float32)
+    maps = {'ink': never, 'ink_ramp': np.zeros(shape, np.float32), 'ink_owner': np.full(shape, -1, np.int16), 'color': first.astype(np.float32),
+            'color_cover': cover, 'color_full': full.astype(np.float32), 'shade': never, 'shade_ramp': np.float32(1e-3)}
+    empty = np.zeros(shape + (4,), np.uint8)
+    final = illustration_layers.prepare(maps, empty, pixels, pixels)['final']
+    owners_final = np.where(final[:, :, 3] > 0, owners_everywhere, -1).astype(np.int16)
+    for suffix, layer in (('line', empty), ('paint', pixels), ('shade', pixels)):
+        Image.fromarray(layer).save(ASSET_DIRECTORY/f'{name}-{suffix}.png')
+    Image.fromarray(final).save(ASSET_DIRECTORY/f'{name}.png')
+    np.savez_compressed(ASSET_DIRECTORY/f'{name}.npz', owners=owners_final, **maps)
+    part_reports = [{'id': part_id, 'index': index, 'outline_start': 0., 'outline_end': 0.,
+                     'fill_start': fill_parts[index][0], 'fill_end': fill_parts[index][1]} for index, part_id in enumerate(names)]
+    segments.sort(key=lambda segment: segment['start'])
+    drawability = {'line_length_px': 0, 'stroke_count': 0, 'drawn_stroke_count': 0, 'faded_stroke_count': 0, 'fill_area_px': int(visible.sum()),
+                   'required_seconds': round(float(fill['required']), 2), 'minimum_seconds': round(float(fill['minimum']), 2), 'lineart_gate': None}
+    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'mode': 'reveal', 'source': str(source_path), 'width': artwork.width,
+                'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports, 'layers': ['paint'],
+                'lines': {}, 'painting': counts, 'drawability': drawability, 'ownership': ownership, 'lineart_exception': None,
+                'time_compression': round(max(1., ending), 3),
+                'idle_seconds': round(max(0., total - max([segment['end'] for segment in segments] + [0.]) * total), 2)}
+    (ASSET_DIRECTORY/f'{name}.json').write_text(json.dumps(metadata))
+    return metadata
+
+
 def build_illustration(name, source_path, max_width, max_height, crop=None, parts=None, outline_mask_path=None, seconds=None,
                        region_map_path=None, part_regions=None, lineart_exception=None, drawing=None):
     """Draw, don't reveal: whole strokes inked part by part, then marker color and soft shading, as layers."""
@@ -342,7 +389,10 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     speed = float(drawing.get('speed', 1.))
     if not (math.isfinite(speed) and .25 <= speed <= 4):
         raise ValueError('drawing.speed must be within 0.25..4')
-    art = prepare_artwork(source_path, max_width, max_height, crop, outline_mask_path)
+    mode = drawing.get('mode', 'draw')
+    if mode not in ('draw', 'reveal'):
+        raise ValueError('drawing.mode must be "draw" or "reveal"')
+    art = prepare_artwork(source_path, max_width, max_height, crop, None if mode == 'reveal' else outline_mask_path)
     artwork, pixels, alpha, outline = art['artwork'], art['pixels'], art['alpha'], art['outline']
     shape, labels = alpha.shape, None
     if part_regions:
@@ -353,6 +403,8 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         declared = parts
     else:
         raise ValueError('Illustrations require model-designed semantic parts: part_regions (region_marks.py) or ordered normalized polygons')
+    if mode == 'reveal':
+        return build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, 'regions' if part_regions else 'polygons')
     for index, part_id in enumerate(names):
         if not (outline & (owners == index)).any():
             raise ValueError('Part has no drawable outline; prepare a contour layer/mask before generation: '+part_id)

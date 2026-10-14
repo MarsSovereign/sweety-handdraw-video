@@ -48,8 +48,8 @@ def evaluate(outline, strokes=None, clean=None, skeleton=None):
 def failure_message(gate):
     details = ', '.join(f"{key}={gate['metrics'][key]} (limit {gate['thresholds'][key]})" for key in gate['failures'])
     return ('Line art is texture-like and cannot be drawn stroke by stroke: ' + details +
-            '. Regenerate with clean continuous outlines (no hatching/texture edges), or set the action\'s '
-            '"lineart_exception" to the reason this complex image is deliberate.')
+            '. Regenerate with clean continuous outlines (no hatching/texture edges); for a style without ink outlines set '
+            '"drawing": {"mode": "reveal"} on the job or this action; or set "lineart_exception" to the reason this complex image is deliberate.')
 
 
 if __name__ == '__main__':
