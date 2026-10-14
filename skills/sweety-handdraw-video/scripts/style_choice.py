@@ -14,6 +14,9 @@ from PIL import Image
 from hosted_assets import fetch, resolve_asset
 
 PACKAGE = Path(__file__).resolve().parents[1]
+# Bundled styles with clean ink outlines and flat color are drawn stroke by stroke; styles without outlines
+# (watercolor, gouache, paper cut, pixel, ink wash, crayon, painterly, 3D) are revealed by the brush instead.
+DRAWN_STYLES = {'1', '4', '5', '17', '19', '20'}
 MODE_LABELS = {
     'catalog_auto': '不主动选择，由模型自动匹配',
     'inferred': '不选择列表中的，模型推理产出',
@@ -65,8 +68,10 @@ def prepare_catalog(job, source):
             image.thumbnail((720, 720))
             image.save(preview_path, quality=87)
         preview = 'previews/' + preview_path.name
+        bundled = source == (PACKAGE/'dependencies/hand-drawn-styles').resolve()
         catalog.append({'id': identity, 'name': name, 'preview': preview,
-                        'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path)})
+                        'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path),
+                        **({'drawing_mode': 'draw' if identity in DRAWN_STYLES else 'reveal'} if bundled else {})})
     if not catalog:
         raise ValueError('No numbered styles in the selected STYLES.md')
     catalog.sort(key=lambda entry: tuple(int(part) for part in entry['id'].split('.')))
@@ -108,6 +113,7 @@ def verify_style(job):
     specification = resolved.get('style_spec', {})
     if any(not specification.get(key) for key in ('line', 'palette', 'shading', 'texture', 'background')):
         raise ValueError('Style specification needs line, palette, shading, texture and background')
+    expected = None
     if selection['mode'] in ('catalog', 'catalog_auto'):
         identity = resolved.get('catalog_id')
         entry = next((entry for entry in catalog['styles'] if entry['id'] == identity), None)
@@ -117,13 +123,18 @@ def verify_style(job):
             raise ValueError('The model must not replace the selected numbered style')
         if selection['mode'] == 'catalog_auto' and not resolved.get('content_fit'):
             raise ValueError('Automatic catalog matching needs a content-fit explanation')
+        expected = entry.get('drawing_mode')
     elif resolved.get('catalog_id') or resolved.get('recipe_sha256') or resolved.get('catalog_recipe'):
         raise ValueError('Inferred/custom styles must be independent of hand-drawn recipes')
     if selection['mode'] == 'inferred' and not resolved.get('content_fit'):
         raise ValueError('An inferred style needs a content-based rationale')
     if selection['mode'] == 'custom' and resolved.get('style_basis') != selection['user_description']:
         raise ValueError('Custom style must be based on the exact user description')
-    return {'mode': selection['mode'], 'name': resolved['style_name'], 'resolved_sha256': digest(resolved_path)}
+    drawing_mode = resolved.get('drawing_mode', expected)
+    if drawing_mode not in ('draw', 'reveal') or (expected and drawing_mode != expected):
+        raise ValueError('style/resolved.json needs drawing_mode: "draw" only for clean ink outlines with flat color, otherwise "reveal"; '
+                         'catalog styles keep the catalog value' + (f' ("{expected}")' if expected else ''))
+    return {'mode': selection['mode'], 'name': resolved['style_name'], 'resolved_sha256': digest(resolved_path), 'drawing_mode': drawing_mode}
 
 
 def serve_picker(job, source, port=0):

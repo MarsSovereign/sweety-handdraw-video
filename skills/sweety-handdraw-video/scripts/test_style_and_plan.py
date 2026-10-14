@@ -41,10 +41,14 @@ class StyleAndPlanTests(unittest.TestCase):
         if mode in ('catalog','catalog_auto'):
             entry=next(entry for entry in self.catalog['styles'] if entry['id']==identity)
             resolved.update(catalog_id=identity,recipe_sha256=entry['recipe_sha256'])
+            if 'drawing_mode' not in entry:
+                resolved['drawing_mode']='draw'
         if mode in ('catalog_auto','inferred'):
             resolved['content_fit']='Matches the explanation in this fixture'
         if mode=='custom':
             resolved['style_basis']=selection['user_description']
+        if mode in ('inferred','custom'):
+            resolved['drawing_mode']='draw'
         self.save_resolution(resolved)
         return resolved
 
@@ -55,6 +59,21 @@ class StyleAndPlanTests(unittest.TestCase):
         for mode in ('catalog','catalog_auto','inferred','custom'):
             self.choose(mode,'1' if mode in ('catalog','catalog_auto') else None)
             self.assertEqual(verify_style(self.root)['mode'],mode)
+
+    def test_drawing_mode_is_declared_and_follows_the_bundled_catalog(self):
+        resolved=self.choose('inferred')
+        del resolved['drawing_mode'];self.save_resolution(resolved)
+        with self.assertRaisesRegex(ValueError,'drawing_mode'):
+            verify_style(self.root)
+        bundled=prepare_catalog(self.root,Path(__file__).resolve().parents[1]/'dependencies/hand-drawn-styles')
+        modes={entry['id']:entry['drawing_mode'] for entry in bundled['styles']}
+        self.assertEqual((modes['1'],modes['20'],modes['11'],modes['13'],modes['9']),('draw','draw','reveal','reveal','reveal'))
+        self.catalog=bundled
+        resolved=self.choose('catalog','11')
+        self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
+        resolved['drawing_mode']='draw';self.save_resolution(resolved)
+        with self.assertRaisesRegex(ValueError,'catalog value'):
+            verify_style(self.root)
 
     def test_inferred_and_custom_cannot_borrow_a_catalog_recipe(self):
         for mode in ('inferred','custom'):

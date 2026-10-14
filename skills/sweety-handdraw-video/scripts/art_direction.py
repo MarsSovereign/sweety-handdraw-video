@@ -58,6 +58,8 @@ def verify_art_direction(root, manifest):
     from style_choice import verify_style
     from drawing_contract import verify_drawing_plans
     style_review = verify_style(root)
+    if manifest.get('drawing', {}).get('mode', 'draw') != style_review['drawing_mode']:
+        raise ValueError(f'job.json drawing.mode must follow the chosen style: set "drawing": {{"mode": "{style_review["drawing_mode"]}"}}')
     drawing_review = verify_drawing_plans(root, manifest, style_review)
     design_path=root/manifest.get('design_file','design.json')
     if not design_path.is_file():

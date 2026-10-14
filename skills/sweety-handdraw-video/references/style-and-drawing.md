@@ -39,13 +39,21 @@ python3 scripts/production_options.py JOB --defaults JOB/options/defaults.json
   "style_name":"本片实际画风名称",
   "rationale":"为什么采用此画法",
   "content_fit":"与本片具体内容的对应关系",
-  "style_spec":{"line":"可分辨的独立轮廓","palette":"具体配色","shading":"具体明暗","texture":"具体质感","background":"背景处理"}
+  "style_spec":{"line":"可分辨的独立轮廓","palette":"具体配色","shading":"具体明暗","texture":"具体质感","background":"背景处理"},
+  "drawing_mode":"draw"
 }
 ```
 
 库内两模式还须 `catalog_id` 和快照中的 `recipe_sha256`；库内自动匹配须 `content_fit`。独立推理禁止这些库内字段。自定义还须 `style_basis`，逐字保留用户描述。先运行 `python3 scripts/style_choice.py verify JOB`。
 
-库内配方的锚点、多阶段生成等既有要求仍然适用。对于原本没有黑轮廓的纸雕、像素、水粉、扁平等画风，提前设计可独立追踪的轮廓层或对齐轮廓遮罩，不能假装深色色块就是全部轮廓。保留所选风格的外观；若当前工具无法兼顾，要在生图前说明具体冲突，不能偷偷换画风。
+库内配方的锚点、多阶段生成等既有要求仍然适用。保留所选风格的外观；若当前工具无法兼顾，要在生图前说明具体冲突，不能偷偷换画风。
+
+### 绘制方式：逐笔绘制或揭示
+
+- **逐笔绘制**（`drawing_mode: "draw"`）：只用于有清晰连续墨线、平涂上色的画风。引擎按部位整笔描线、再用马克笔上色，受线稿门槛和 `minimum_seconds` 约束。随包画风中 1、4、5、17、19、20 属于此类。
+- **揭示**（`drawing_mode: "reveal"`）：水彩、水粉、纸雕、像素、水墨、蜡笔、厚涂、3D 等没有墨线轮廓的画风。手带宽软笔刷按部位斜向扫过，画面只在刷过处显出成图；不做线稿提取，也不受线稿门槛约束，最短时长约每部位0.5–1秒。不要为这类画风硬造轮廓层。
+
+库内画风的绘制方式由目录固定（`style/catalog.json` 的 `drawing_mode`，选择窗口里会标明）；独立推理和自定义画风在 `resolved.json` 写明 `drawing_mode`。`job.json` 写 `"drawing": {"mode": "reveal"}`（默认 `draw`）与之保持一致，构建会核对；逐笔绘制的片子里个别插画可在动作的 `drawing` 中单独改用 `reveal`。
 
 ## 出图前的可绘制计划
 
