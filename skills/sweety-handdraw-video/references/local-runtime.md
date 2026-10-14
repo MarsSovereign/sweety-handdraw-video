@@ -1,6 +1,6 @@
 # 声音与本机依赖
 
-运行需要 Python 3.9+、Pillow、NumPy、SciPy、requests、ffmpeg/ffprobe。正文手写字体优先 macOS Hannotate；字幕使用独立的常规中文字体。字体回退不能当作手写风格已验收，不把系统商业字体复制进包。
+运行需要 Python 3.9+、Pillow、NumPy、SciPy、requests、fontTools、ffmpeg/ffprobe，`scripts/setup.sh` 在 macOS 与 Linux 上一次装好（`--check` 只检查）。正文手写字体优先 macOS Hannotate；字幕使用独立的常规中文字体，Linux 经 fontconfig 选用 Noto CJK。构建前 `scripts/fonts.py` 按手写、字幕、水印逐字核对字形，缺字时依次换备用字体，全部缺字则列出缺失字符与已尝试字体并停止。字体回退不能当作手写风格已验收，不把系统商业字体复制进包。
 
 ## 本地配音能力
 
@@ -56,7 +56,7 @@ python scripts/voxcpm_voice.py JOB
 
 ## 图像隐私
 
-内置原脚本由 Bun 执行，本流程要求 ExifTool，避免隐式安装 sharp。执行 `python3 scripts/clean_image.py image.png --audit privacy.json`：先执行随包隐私清理，再去除模拟相机字段，核验元数据与残留扩展属性。缺依赖时准确报告，不静默跳过。
+执行 `python3 scripts/clean_image.py image.png --audit privacy.json`：纯 Python 重写 PNG / JPEG / WebP 容器，只保留图像数据块（像素不重新编码，替换前核对像素一致），去除 EXIF、GPS、XMP、IPTC、ICC、文本注释与 C2PA 等字段，清除 macOS 来源扩展属性与 Linux `user.*` 属性，不写入模拟相机字段。不需要 Bun 或 ExifTool；结果与旧流程（随包 `main.ts` + `exiftool -all=`）逐字节一致，审计格式不变。其他格式不改动并在审计中如实报告。
 
 ## 原片音色与纯旁白验收
 

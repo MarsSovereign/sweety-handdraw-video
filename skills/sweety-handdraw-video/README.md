@@ -9,7 +9,7 @@
 - 字幕与收尾：[模型设计规则](references/subtitle-design.md)
 - 内置依赖和冲突处理：[依赖路由](references/dependencies.md)
 
-旁白支持兼容的本机 VoiceStudio 服务，或已安装并明确配置的 VoxCPM2；已核对的导出音频可以离线复用。音色仅保留逼真男声、逼真女声、甜美学姐、Iapetus、知性女讲师、故事解说。前两款提供对应成片节选，生产需本机原始参考；其余四款提供合成参考和同文试听，使用方法见[本地声音运行](references/local-runtime.md)。生成新图片还需图像工具、Bun 和 ExifTool；Python 与 FFmpeg 负责本地合成。内置的参考指南不需要另行安装为 Skills。
+旁白支持兼容的本机 VoiceStudio 服务，或已安装并明确配置的 VoxCPM2；已核对的导出音频可以离线复用。音色目录与试听见[本地声音运行](references/local-runtime.md)；逼真男声、逼真女声随包提供成片节选试听，生产需本机原始参考。生成新图片还需宿主的图像工具（Claude Code 需接入生图工具 / MCP 或使用用户提供的插画）；Python、fontTools 与 FFmpeg 负责本地合成，图片隐私清理为纯 Python。支持 macOS 与 Linux，`scripts/setup.sh` 一次装好运行环境。内置的参考指南不需要另行安装为 Skills。
 
 ### v1.2：整篇声音优先
 
@@ -19,7 +19,7 @@
 
 原片音色不再以合成试听继续克隆。导入参考与逐字稿绑定哈希，VoxCPM2 默认同时使用原参考和准确逐字稿；本机已验收的主力音色保存在个人声音目录中，不进入公共包。参考清理、同文对照、正文短样和完整旁白分别验收；没有附加配乐不代表旁白内部没有杂音。
 
-字幕默认白字黑边，禁止重复字幕；编辑用字幕独立放在 `outputs/editing/`。公开预设与展示素材改用 GitHub Release 链接，见[托管与缓存](references/hosted-assets.md)。当前女声暂用，保留原片参考，后续继续调整；不是最终听感验收。
+字幕默认白字黑边，禁止重复字幕；编辑用字幕独立放在 `outputs/editing/`。v1.3 起手部、画风预览与试听随包提供，缺失或损坏时按镜像修复，见[托管与缓存](references/hosted-assets.md)。当前女声暂用，保留原片参考，后续继续调整；不是最终听感验收。
 
 ### v1.2.1：美术指导检查加强
 
