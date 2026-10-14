@@ -151,12 +151,19 @@ class FilmBuilder:
         if self.width < 320 or self.height < 240 or self.width % 2 or self.height % 2 or not 1 <= self.fps <= 60:
             raise ValueError('Canvas requires even width/height >=320x240 and fps within 1..60')
         self.font_path, self.font_index = find_font(self.manifest)
-        stroke_assets.configure_assets(self.work / 'assets', self.font_path, self.font_index)
+        stroke_assets.configure_assets(self.work / 'assets', self.font_path, self.font_index, self.fps)
         self.assets = {}
         self.next_asset = 0
         self.seen_beat_ids = set()
 
-    def create_asset(self, action):
+    @staticmethod
+    def action_weight(action):
+        weight = float(action.get('weight', 3 if action['type'] == 'illustration' else 1))
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError('Action weight must be finite and positive')
+        return weight
+
+    def create_asset(self, action, seconds=None):
         self.next_asset += 1
         name = f'element-{self.next_asset:04d}'
         kind = action['type']
@@ -164,23 +171,20 @@ class FilmBuilder:
             text = str(action['text'])
             if not text.strip() or '\n' in text:
                 raise ValueError('Each text action must contain one nonempty line')
-            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'))
+            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds)
         elif kind == 'marker':
             metadata = stroke_assets.build_brush(name, int(action['width']), int(action['height']),
-                action.get('color', '#EAC958'), action.get('style', 'highlight'), action.get('line_width'))
+                action.get('color', '#EAC958'), action.get('style', 'highlight'), action.get('line_width'), seconds=seconds)
         elif kind == 'illustration':
             source = resolve_input(self.root, action['source'])
-            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'),action.get('parts'),resolve_input(self.root,action['outline_mask']) if action.get('outline_mask') else None)
+            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'),action.get('parts'),resolve_input(self.root,action['outline_mask']) if action.get('outline_mask') else None,seconds=seconds)
         else:
             raise ValueError(f'Unsupported action type: {kind}')
         self.assets[name] = metadata
         x, y = int(action['x']), int(action['y'])
         if not (0 <= x and 0 <= y and x + metadata['width'] <= self.width and y + metadata['height'] <= self.height):
             raise ValueError(f'Element is outside canvas: {action}')
-        weight = float(action.get('weight', 3 if kind == 'illustration' else 1))
-        if not math.isfinite(weight) or weight <= 0:
-            raise ValueError('Action weight must be finite and positive')
-        return {'asset': name, 'x': x, 'y': y, 'weight': weight,
+        return {'asset': name, 'x': x, 'y': y, 'weight': self.action_weight(action),
                 'z': int(action.get('z', 10 if kind == 'marker' and action.get('style', 'highlight') == 'highlight' else 30)),
                 'role': kind}
 
@@ -218,7 +222,8 @@ class FilmBuilder:
         for page_index, page_spec in enumerate(self.manifest['pages']):
             if not page_spec.get('beats'):
                 raise ValueError('Each page requires narration beats')
-            page = {'index': page_index, 'start': cursor, 'beats': [], 'events': []}
+            page = {'index': page_index, 'start': cursor, 'beats': [], 'events': [],
+                    'camera': page_spec.get('camera'), 'transition': page_spec.get('transition')}
             for beat_index, beat_spec in enumerate(page_spec['beats']):
                 beat_id = beat_spec.get('id', f'p{page_index:02d}-b{beat_index:02d}')
                 if not re.fullmatch(r'[A-Za-z0-9_-]+', beat_id) or beat_id in self.seen_beat_ids:
@@ -237,21 +242,24 @@ class FilmBuilder:
                 beat = {'id': beat_id, 'start': cursor, 'end': cursor + duration, 'duration': duration, 'text': beat_spec['text']}
                 if not str(beat['text']).strip():
                     raise ValueError('Narration text cannot be empty')
-                actions = [self.create_asset(action) for action in beat_spec.get('actions',[])]
-                if not actions and not page_spec.get('visual_groups'):
+                specs = beat_spec.get('actions',[])
+                if not specs and not page_spec.get('visual_groups'):
                     raise ValueError('Every beat needs actions or a page visual group')
                 lead = .54
                 hold = max(.5, duration * .13)
                 gap = .07
-                budget = duration - lead - hold - gap * max(0, len(actions) - 1)
-                if actions and budget < .15 * len(actions):
+                budget = duration - lead - hold - gap * max(0, len(specs) - 1)
+                if specs and budget < .15 * len(specs):
                     raise ValueError(f'{beat_id}: too many drawing actions for the measured narration; simplify or regroup')
+                weights = [self.action_weight(spec) for spec in specs]
                 drawing_cursor = cursor + lead
-                for action in actions:
-                    drawing_seconds = budget * action['weight'] / sum(element['weight'] for element in actions)
+                for spec, weight in zip(specs, weights):
+                    # Assets are built after scheduling so the engine knows the real drawing seconds.
+                    drawing_seconds = budget * weight / sum(weights)
+                    action = self.create_asset(spec, drawing_seconds)
                     action.update(start=drawing_cursor, end=drawing_cursor + drawing_seconds, caption=False)
+                    page['events'].append(action)
                     drawing_cursor += drawing_seconds + gap
-                page['events'].extend(actions)
                 cue_source = aligned if master_report else beat_spec
                 if cue_source.get('caption_cues'):
                     beat['caption_cues'] = cue_source['caption_cues']
@@ -277,13 +285,14 @@ class FilmBuilder:
                         raise ValueError('Visual group needs a nonnegative lead and at least 0.45s reading hold')
                     start = first['start'] + lead
                     end = last['end'] - hold
-                    group_actions = [self.create_asset(action) for action in group['actions']]
-                    budget = end-start-.08*(len(group_actions)-1)
-                    if not group_actions or budget < .15*len(group_actions):
+                    specs = group['actions']
+                    budget = end-start-.08*(len(specs)-1)
+                    if not specs or budget < .15*len(specs):
                         raise ValueError('Visual group has no usable drawing time')
-                    total_weight=sum(action['weight'] for action in group_actions)
-                    for action in group_actions:
-                        duration=budget*action['weight']/total_weight
+                    weights=[self.action_weight(spec) for spec in specs]
+                    for spec, weight in zip(specs, weights):
+                        duration=budget*weight/sum(weights)
+                        action=self.create_asset(spec, duration)
                         action.update(start=start,end=start+duration,caption=False)
                         page['events'].append(action)
                         start+=duration+.08

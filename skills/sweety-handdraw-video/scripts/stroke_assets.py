@@ -11,14 +11,16 @@ import stroke_paths as stroke_utils
 ASSET_DIRECTORY = None
 FONT_PATH = None
 FONT_INDEX = 0
+FPS = 30
 
 
-def configure_assets(directory, font_path, font_index=0):
-    global ASSET_DIRECTORY, FONT_PATH, FONT_INDEX
+def configure_assets(directory, font_path, font_index=0, fps=30):
+    global ASSET_DIRECTORY, FONT_PATH, FONT_INDEX, FPS
     ASSET_DIRECTORY = Path(directory)
     ASSET_DIRECTORY.mkdir(parents=True, exist_ok=True)
     FONT_PATH = str(font_path)
     FONT_INDEX = int(font_index)
+    FPS = int(fps)
 
 
 def lengths(points):
@@ -125,7 +127,7 @@ def measure_text(text, font, margin=5):
             'origin': [margin-left, margin-top], 'placements': placements}
 
 
-def build_text(name, text, size, color='#302C26'):
+def build_text(name, text, size, color='#302C26', seconds=None):
     font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
     layout = measure_text(text, font)
     width, height = layout['width'], layout['height']
@@ -170,7 +172,7 @@ def build_text(name, text, size, color='#302C26'):
     return metadata
 
 
-def build_brush(name, width, height, color, style='highlight', line_width=None):
+def build_brush(name, width, height, color, style='highlight', line_width=None, seconds=None):
     if style == 'highlight':
         radius = min(20, height / 2.4)
         xs = np.linspace(radius,width - radius,max(5,math.ceil(width / 3)))
@@ -204,7 +206,7 @@ def build_brush(name, width, height, color, style='highlight', line_width=None):
     return save_asset(name,rgba,reveal,segments,{'type':'marker_'+style})
 
 
-def build_illustration(name, source_path, max_width, max_height, crop=None, parts=None, outline_mask_path=None):
+def build_illustration(name, source_path, max_width, max_height, crop=None, parts=None, outline_mask_path=None, seconds=None):
     artwork=Image.open(source_path).convert('RGBA')
     source_size = artwork.size
     if crop is not None:

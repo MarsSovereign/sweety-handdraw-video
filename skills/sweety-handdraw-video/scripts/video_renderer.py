@@ -8,6 +8,7 @@ import wave
 import numpy as np
 from PIL import Image, ImageColor
 from watermark_assets import watermark_position
+from motion_profile import distance_fraction
 
 
 def ease(fraction):
@@ -30,7 +31,7 @@ def point_on_asset(metadata,progress):
             if segment['kind']=='travel':
                 return points[0]+ease(fraction)*(points[-1]-points[0])+[0,-10*math.sin(math.pi*fraction)]
             distances=np.array(segment['lengths'])
-            target=fraction*distances[-1]
+            target=distance_fraction(fraction,segment.get('profile','linear'))*distances[-1]
             return np.array([np.interp(target,distances,points[:,0]),np.interp(target,distances,points[:,1])])
         previous=segment
     if progress<metadata['segments'][0]['start']:
