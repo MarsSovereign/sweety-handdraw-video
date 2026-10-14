@@ -7,6 +7,7 @@ import re
 import subprocess
 import numpy as np
 from PIL import Image
+from motion_profile import distance_fraction
 
 
 def file_hash(path):
@@ -67,7 +68,8 @@ def match_reveal_to_tip(metadata, reveal, mask, kinds):
             continue
         points = np.array(segment['points'])
         lengths = np.array(segment['lengths'])
-        along = np.clip((timestamps[selected] - segment['start']) / max(1e-8, segment['end'] - segment['start']), 0, 1) * lengths[-1]
+        along = distance_fraction(np.clip((timestamps[selected] - segment['start']) / max(1e-8, segment['end'] - segment['start']), 0, 1),
+                                  segment.get('profile', 'linear')) * lengths[-1]
         separation = np.hypot(xs[selected] - np.interp(along, lengths, points[:, 0]), ys[selected] - np.interp(along, lengths, points[:, 1]))
         distances[selected] = np.minimum(distances[selected], separation)
         radii[selected] = np.maximum(radii[selected], segment.get('radius', 0))
@@ -144,7 +146,9 @@ def verify_assets(root, timeline):
                         require(times.min()>=glyph['start']-1e-6 and times.max()<=glyph['end']+1e-6,
                                 f'{name}: a future character appears early')
                 entry['isolated_characters']=len(metadata['characters'])
-                require(distances.max() < 9, f'{name}: text is too far from the nib')
+                # Stroke-order glyphs reveal a whole brush width (up to ~0.13 em) around the median under the nib.
+                limit = max(9, .15 * metadata['font_size']) if metadata.get('handwriting', {}).get('mode') == 'stroke_order' else 9
+                require(distances.max() < limit, f'{name}: text is too far from the nib')
             else:
                 require((distances <= radii + .04).all(), f'{name}: marker outside the active brush')
             entry['maximum_tip_distance_px'] = float(distances.max())

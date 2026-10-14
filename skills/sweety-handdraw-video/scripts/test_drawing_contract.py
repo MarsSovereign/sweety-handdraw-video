@@ -37,7 +37,7 @@ class DrawingContractTests(unittest.TestCase):
         cases=[('把顺利，留给准备',84),('允许事情出错',72),('gypj，准备好了。',60)]
         for index,(text,size) in enumerate(cases):
             font=ImageFont.truetype(font_path,size,index=font_index)
-            metadata=stroke_assets.build_text('complete-'+str(index),text,size)
+            metadata=stroke_assets.build_text('complete-'+str(index),text,size,stroke_order=False)
             actual=Image.open(self.directory/('complete-'+str(index)+'.png')).getchannel('A')
             reference=Image.new('L',(actual.width+400,actual.height+400))
             drawing=ImageDraw.Draw(reference)
