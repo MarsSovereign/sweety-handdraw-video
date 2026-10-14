@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 import wave
 import numpy as np
 from PIL import Image, ImageFont
@@ -18,6 +19,7 @@ from watermark_assets import prepare_watermark
 from narration_master import load_master
 from audio_contract import resolve_audio_layers, validate_ending
 from storyboard_lint import anchor_beat, check_build, group_beats
+from timeline_contract import validate_page_motion
 
 PACKAGE = Path(__file__).resolve().parents[1]
 SAMPLE_RATE = 48000
@@ -164,6 +166,20 @@ class FilmBuilder:
             raise ValueError('Action weight must be finite and positive')
         return weight
 
+    @staticmethod
+    def minimum_seconds(action):
+        # Readers need about 0.3 s per hanzi to see the stroke order; Latin and punctuation write faster.
+        if action['type'] != 'text':
+            return 0.
+        return sum(.3 if '\u3400' <= character <= '\u9fff' else .12 for character in str(action['text']))
+
+    @staticmethod
+    def travel_gap(first, second, minimum):
+        # Lift-and-move time grows with distance so the pen never teleports between elements.
+        anchors = [np.array([float(spec['x']) + float(spec.get('width', spec.get('size', 60))) / 2,
+                             float(spec['y']) + float(spec.get('height', spec.get('size', 60))) / 2]) for spec in (first, second)]
+        return float(np.clip(np.linalg.norm(anchors[1] - anchors[0]) / 1600, max(minimum, .12), .45))
+
     def create_asset(self, action, seconds=None):
         self.next_asset += 1
         name = f'element-{self.next_asset:04d}'
@@ -172,7 +188,8 @@ class FilmBuilder:
             text = str(action['text'])
             if not text.strip() or '\n' in text:
                 raise ValueError('Each text action must contain one nonempty line')
-            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds)
+            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds,
+                                                stroke_order=bool(action.get('stroke_order', True)))
         elif kind == 'marker':
             metadata = stroke_assets.build_brush(name, int(action['width']), int(action['height']),
                 action.get('color', '#EAC958'), action.get('style', 'highlight'), action.get('line_width'), seconds=seconds)
@@ -286,19 +303,28 @@ class FilmBuilder:
                     raise ValueError(f'{label} starts drawing while {previous} is still drawing (one pen); '
                                      'put both in one visual group and use "from_beat" to start an action with its sentence')
             for start, end, gap, specs, label in blocks:
-                budget = end - start - gap * (len(specs) - 1)
-                if budget < .15 * len(specs):
+                gaps = [self.travel_gap(first, second, gap) for first, second in zip(specs, specs[1:])] + [0.]
+                floors = [self.minimum_seconds(spec) for spec in specs]
+                available = end - start - sum(gaps)
+                if available < .15 * len(specs):
                     raise ValueError(f'{label}: too many drawing actions for the measured narration; simplify or extend the window across beats with a visual group')
+                if available - sum(floors) < .15 * len(specs):
+                    # Readable writing time is preferred, not guaranteed: shrink it and say so.
+                    print(f'WARNING {label}: text needs {sum(floors):.2f}s to show stroke order but only {available:.2f}s exist; '
+                          'shorten the text or widen the window', file=sys.stderr)
+                    floors = [floor * (available - .15 * len(specs)) / sum(floors) for floor in floors]
+                free = available - sum(floors)
                 weights = [self.action_weight(spec) for spec in specs]
-                for spec, weight in zip(specs, weights):
+                for spec, weight, floor, travel in zip(specs, weights, floors, gaps):
                     # Assets are built after scheduling so the engine knows the real drawing seconds.
-                    seconds = budget * weight / sum(weights)
+                    seconds = floor + free * weight / sum(weights)
                     action = self.create_asset(spec, seconds)
                     action.update(start=start, end=start + seconds, caption=False, visual=spec.get('visual'))
                     if spec['type'] == 'illustration':
                         action['image'] = [spec['source'], spec.get('crop')]
                     page['events'].append(action)
-                    start += seconds + gap
+                    start += seconds + travel
+            validate_page_motion(page, {'width': self.width, 'height': self.height}, first=page_index == 0)
             page['speech_end'] = page['beats'][-1]['end']
             pause = float(options.get('page_pause_seconds', .24)) if page_index < len(self.manifest['pages']) - 1 else float(options.get('end_hold_seconds', .45))
             if pause < 0:
