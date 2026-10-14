@@ -139,7 +139,7 @@ def build_text(name, text, size, color='#302C26', seconds=None, stroke_order=Tru
         return metadata
     # Whole-line font fallback keeps one consistent look when any ideograph lacks stroke data.
     missing = [character for character in text if handwriting.is_hanzi(character) and handwriting.character_data(character) is None]
-    report = {'mode':'font','reason':'missing stroke data: '+''.join(missing) if missing else 'stroke order disabled'}
+    report = {'mode':'font','reason':'missing stroke data: '+''.join(dict.fromkeys(missing)) if missing else 'stroke order disabled'}
     layout = measure_text(text, font)
     width, height = layout['width'], layout['height']
     layer = Image.new('RGBA',(width,height))

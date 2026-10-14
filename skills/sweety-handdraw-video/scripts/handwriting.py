@@ -239,7 +239,7 @@ def build_line(text, font, size, color, seconds=None, fps=30, margin=5):
     bottom = max([0] + [box[3] for _, _, box, _ in glyphs])
     width, height, origin = int(right - left + 2 * margin), int(bottom - top + 2 * margin), [int(margin - left), int(margin - top)]
     alpha = np.zeros((height, width), dtype=np.float32)
-    # Each character: list of (stroke alpha patch, patch box, median points in layer coordinates).
+    # Each character: (layer offset, patch shape, [(stroke alpha patch or None, nib path in layer coordinates)]).
     characters = []
     for character, x, box, strokes in glyphs:
         offset = np.array([origin[0] + x + box[0], origin[1] + box[1]])
@@ -296,13 +296,13 @@ def build_line(text, font, size, color, seconds=None, fps=30, margin=5):
                     _, nearest = cKDTree(points).query(np.c_[xx[selected], yy[selected]])
                     local_reveal[selected] = begin + duration * time_fraction(lengths[nearest] / max(1e-6, lengths[-1]), 'minjerk')
         elif timed:
-            selected = timed[0][0] > 0
+            selected = (timed[0][0] > 0) & ~np.isfinite(local_reveal)
             ends = np.cumsum([len(points) for _, points, _, _, _ in timed])
             points = np.vstack([points for _, points, _, _, _ in timed])
             _, nearest = cKDTree(points).query(np.c_[xx[selected], yy[selected]])
             stroke = np.searchsorted(ends, nearest, side='right')
             times = np.empty(len(nearest))
-            for number, (_, own, lengths, begin, duration) in enumerate(timed):
+            for number, (_, _, lengths, begin, duration) in enumerate(timed):
                 chosen = stroke == number
                 position = nearest[chosen] - (ends[number - 1] if number else 0)
                 times[chosen] = begin + duration * time_fraction(lengths[position] / max(1e-6, lengths[-1]), 'minjerk')
