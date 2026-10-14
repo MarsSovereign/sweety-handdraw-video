@@ -31,8 +31,9 @@ def weighted_lengths(points):
     return np.r_[0., np.cumsum(np.linalg.norm(steps, axis=1) * (1 + 1.5 * np.clip(turn / (np.pi / 8), 0, 1)))]
 
 
-def lift_seconds(distance):
-    return .08 + .07 * min(1., distance / 300.)
+def lift_seconds(distance, fps=30, scale=1.):
+    """Pen-up time: 80-150 ms, never so short that min-jerk travel (peak 1.875x mean) exceeds ~70 px per frame."""
+    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (70. * fps))
 
 
 def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
@@ -133,7 +134,7 @@ def line_seconds(ordered, speed, fps, detail_speed=None):
     total, previous = 0., None
     for stroke in ordered:
         rate = detail_speed if detail_speed and stroke['tier'] == DETAIL else speed
-        total += duration(stroke, rate, fps) + (1.1 * lift_seconds(np.linalg.norm(stroke['points'][0] - previous)) if previous is not None else 0.)
+        total += duration(stroke, rate, fps) + (lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1) if previous is not None else 0.)
         previous = stroke['points'][-1]
     return total
 
@@ -185,7 +186,7 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
         mine = [stroke for stroke in ordered if stroke['part'] == part]
         for stroke in mine:
             if previous is not None:
-                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous)) * (.9 + .2 * hashed(stroke['index']))
+                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, .9 + .2 * hashed(stroke['index']))
                 segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
                                  'points': [previous.tolist(), stroke['points'][0].tolist()]})
                 cursor += lift

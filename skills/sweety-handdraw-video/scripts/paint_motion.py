@@ -162,7 +162,7 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
 
     def travel(destination):
         nonlocal cursor
-        lift = lift_seconds(np.linalg.norm(destination - tip)) * lifts
+        lift = lift_seconds(np.linalg.norm(destination - tip), fps, lifts)
         segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
                          'points': [tip.tolist(), destination.tolist()]})
         cursor += lift

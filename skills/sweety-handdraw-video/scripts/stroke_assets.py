@@ -366,9 +366,10 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         for index, (stroke, length) in enumerate(zip(sketches, each)):
             length = max(2. / FPS, length * factor)
             if index:
-                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + .1 * factor) / total,
+                lift = line_drawing.lift_seconds(np.linalg.norm(stroke['points'][0] - sketches[index - 1]['points'][-1]), FPS, factor)
+                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
                                  'points': [sketches[index - 1]['points'][-1].tolist(), stroke['points'][0].tolist()]})
-                cursor += .1 * factor
+                cursor += lift
             stroke['times'] = (cursor + length * time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')) / total
             segments.append({'kind': 'sketch', 'start': cursor / total, 'end': (cursor + length) / total, 'profile': 'minjerk',
                              'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
@@ -436,7 +437,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports,
                 'layers': ['paint', 'shade'] + (['sketch'] if sketches else []) + ['line'],
                 'lines': {**topology, **line_counts}, 'painting': fill_counts, 'drawability': drawability,
-                'ownership': 'regions' if part_regions else 'polygons', 'lineart_exception': lineart_exception,
+                'ownership': 'regions' if part_regions else 'polygons', 'lineart_exception': lineart_exception, 'time_compression': round(max(1., ending), 3),
                 'idle_seconds': round(max(0., total - max([segment['end'] for segment in segments] + [0.]) * total), 2)}
     (ASSET_DIRECTORY/f'{name}.json').write_text(json.dumps(metadata))
     return metadata
