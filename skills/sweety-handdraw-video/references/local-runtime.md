@@ -56,7 +56,7 @@ python scripts/voxcpm_voice.py JOB
 
 ## 图像隐私
 
-执行 `python3 scripts/clean_image.py image.png --audit privacy.json`：纯 Python 重写 PNG / JPEG / WebP 容器，只保留图像数据块（像素不重新编码，替换前核对像素一致），去除 EXIF、GPS、XMP、IPTC、ICC、文本注释与 C2PA 等字段，清除 macOS 来源扩展属性与 Linux `user.*` 属性，不写入模拟相机字段。不需要 Bun 或 ExifTool；结果与旧流程（随包 `main.ts` + `exiftool -all=`）逐字节一致，审计格式不变。其他格式不改动并在审计中如实报告。
+执行 `python3 scripts/clean_image.py image.png --audit privacy.json`：纯 Python 重写 PNG / JPEG / WebP 容器，只保留图像数据块（像素不重新编码，替换前核对像素一致），去除 EXIF、GPS、XMP、IPTC、ICC、文本注释与 C2PA 等字段，清除 macOS 来源扩展属性与 Linux `user.*` 属性，不写入模拟相机字段。不需要 Bun 或 ExifTool；结果与旧流程（随包 `main.ts` + `exiftool -all=`）逐字节一致，审计格式不变。其他格式保持原样并报错，提示先转为 PNG、JPEG 或 WebP。
 
 ## 原片音色与纯旁白验收
 
