@@ -1,0 +1,306 @@
+"""Order, time and render whole line strokes like a right-handed person: per part the silhouette first,
+then long interior structure, then details; texture-like marks fade in softly when time is short."""
+import math
+import re
+import numpy as np
+from scipy import ndimage
+from motion_profile import time_fraction
+from stroke_paths import calculate_lengths
+
+LINE_SPEED = 420.     # px/s along curvature-weighted length: a person inking a confident contour at 1080p
+SPEED_FACTOR = 4.     # calibrated cap: speed-drawing videos run 4-8x life and still read as human when the order is coherent
+DETAIL_BOOST = 1.6    # low-priority details may run this much faster than the main strokes under pressure
+FADE_SECONDS = .3
+REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than draw a line upward or leftward
+KEY_PART = re.compile(r'head|face|eye|mouth|nose|hand|finger|paw', re.I)
+SILHOUETTE, KEY, STRUCTURE, DETAIL, TEXTURE = range(5)
+
+
+def hashed(value):
+    return (math.sin(value * 12.9898 + 4.1414) * 43758.5453) % 1.
+
+
+def weighted_lengths(points):
+    """Arc length inflated on tight turns so the nib slows down on curves and corners."""
+    steps = np.diff(points, axis=0)
+    if not len(steps):
+        return np.zeros(1)
+    angles = np.arctan2(steps[:, 1], steps[:, 0])
+    turn = np.abs((np.diff(angles, prepend=angles[0]) + np.pi) % (2 * np.pi) - np.pi)
+    turn = ndimage.uniform_filter1d(turn, 5, mode='nearest')
+    return np.r_[0., np.cumsum(np.linalg.norm(steps, axis=1) * (1 + 1.5 * np.clip(turn / (np.pi / 8), 0, 1)))]
+
+
+def lift_seconds(distance):
+    return .08 + .07 * min(1., distance / 300.)
+
+
+def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
+    """Assign each whole stroke to the part owning most of it, and a priority tier."""
+    height, width = alpha.shape
+    owned = owners >= 0
+    _, nearest = ndimage.distance_transform_edt(~owned, return_indices=True)
+    owner_map = owners[nearest[0], nearest[1]]
+    exterior = ndimage.distance_transform_edt(ndimage.binary_fill_holes(alpha > 30))
+    rgb = pixels[:, :, :3].astype(float)
+    luminance = np.where(alpha > 30, rgb @ [.299, .587, .114], 255.)
+    ink_reference = np.percentile(luminance[alpha > 30], 2) if (alpha > 30).any() else 0.
+    offsets = np.array([(dx, dy) for dy in range(-2, 3) for dx in range(-2, 3)])
+    for index, stroke in enumerate(strokes):
+        cells = np.clip(np.rint(stroke['points']).astype(int), 0, [width - 1, height - 1])
+        stroke['part'] = int(np.bincount(owner_map[cells[:, 1], cells[:, 0]]).argmax())
+        window = np.clip(cells[:, None, :] + offsets[None], 0, [width - 1, height - 1])
+        values = luminance[window[..., 1], window[..., 0]]
+        darkest = np.argmin(values, axis=1)
+        chosen = window[np.arange(len(cells)), darkest]
+        stroke['color'] = ndimage.uniform_filter1d(rgb[chosen[:, 1], chosen[:, 0]], 9, axis=0, mode='nearest')
+        tone = np.clip((250 - values.min(1)) / max(20., 250 - ink_reference), 0, 1)
+        stroke['tone'] = float(tone.mean())
+        silhouette = (exterior[cells[:, 1], cells[:, 0]] <= 4).mean() >= .5
+        key = part_ids[stroke['part']] in key_parts or bool(KEY_PART.search(part_ids[stroke['part']]))
+        if stroke['micro'] or stroke['tone'] < .3 or (stroke['length'] < 25 and stroke['tone'] < .5 and not key):
+            stroke['tier'] = TEXTURE
+        elif silhouette and stroke['length'] >= 20:
+            stroke['tier'] = SILHOUETTE
+        elif key:
+            stroke['tier'] = KEY
+        else:
+            stroke['tier'] = STRUCTURE if stroke['length'] >= 40 else DETAIL
+        stroke['weights'] = weighted_lengths(stroke['points'])
+        stroke['index'] = index
+    return strokes
+
+
+def orient(stroke, tip):
+    """Right-hander prior as a point index order: loops start at the top going counter-clockwise,
+    lines steeper than ~30 degrees run down, flatter ones run right; tiny marks start nearer the pen."""
+    points = stroke['points']
+    count = len(points)
+    forward, backward = np.arange(count), np.arange(count)[::-1]
+    if stroke['closed']:
+        top = int(np.argmin(points[:, 1] * 1000 + points[:, 0]))
+        ring = np.r_[np.arange(top, count), np.arange(0, top + 1)]
+        loop = points[ring]
+        area = np.sum(loop[:-1, 0] * loop[1:, 1] - loop[1:, 0] * loop[:-1, 1])
+        return (ring[::-1] if area > 0 else ring), 0.
+    delta = points[-1] - points[0]
+    if np.linalg.norm(delta) < 8:
+        near = np.linalg.norm(points[0] - tip) <= np.linalg.norm(points[-1] - tip)
+        return (forward if near else backward), 0.
+    if abs(delta[1]) >= .6 * abs(delta[0]):
+        return (forward if delta[1] >= 0 else backward), REVERSE_COST
+    return (forward if delta[0] >= 0 else backward), REVERSE_COST
+
+
+def apply_order(stroke, index):
+    if not np.array_equal(index, np.arange(len(stroke['points']))):
+        for key in ('points', 'radius', 'color'):
+            stroke[key] = stroke[key][index]
+        stroke['weights'] = weighted_lengths(stroke['points'])
+
+
+def order(strokes, part_count, tip):
+    """Within each part: silhouette, key features, structure, details; greedy nearest start from the pen.
+    Going against the direction prior costs REVERSE_COST px of extra travel."""
+    ordered = []
+    tip = np.asarray(tip, float)
+    for part in range(part_count):
+        for tier in (SILHOUETTE, KEY, STRUCTURE, DETAIL):
+            pool = [stroke for stroke in strokes if stroke['part'] == part and stroke['tier'] == tier and not stroke.get('fade')]
+            while pool:
+                choice = None
+                for stroke in pool:
+                    index, penalty = orient(stroke, tip)
+                    points = stroke['points']
+                    cost = np.linalg.norm(points[index[0]] - tip)
+                    if penalty and np.linalg.norm(points[index[-1]] - tip) + penalty < cost:
+                        index, cost = index[::-1], np.linalg.norm(points[index[-1]] - tip) + penalty
+                    if choice is None or cost < choice[0]:
+                        choice = (cost, stroke, index)
+                _, best, index = choice
+                pool = [stroke for stroke in pool if stroke is not best]
+                apply_order(best, index)
+                ordered.append(best)
+                tip = best['points'][-1]
+    return ordered, tip
+
+
+def duration(stroke, speed, fps):
+    return max(2. / fps, stroke['weights'][-1] / speed)
+
+
+def line_seconds(ordered, speed, fps, detail_speed=None):
+    total, previous = 0., None
+    for stroke in ordered:
+        rate = detail_speed if detail_speed and stroke['tier'] == DETAIL else speed
+        total += duration(stroke, rate, fps) + (1.1 * lift_seconds(np.linalg.norm(stroke['points'][0] - previous)) if previous is not None else 0.)
+        previous = stroke['points'][-1]
+    return total
+
+
+def requirements(strokes, part_count, tip, speed, fps):
+    """Seconds for: every stroke at human pace; every non-texture stroke at the cap; silhouette + key features at the cap."""
+    every = [dict(stroke, fade=False, tier=min(stroke['tier'], DETAIL)) for stroke in strokes]
+    drawable = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] != TEXTURE]
+    essential = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] in (SILHOUETTE, KEY)]
+    cap = LINE_SPEED * speed * SPEED_FACTOR
+    return {'required': line_seconds(order(every, part_count, tip)[0], LINE_SPEED * speed, fps),
+            'all_at_cap': line_seconds(order(drawable, part_count, tip)[0], cap, fps, cap * DETAIL_BOOST),
+            'minimum': line_seconds(order(essential, part_count, tip)[0], cap, fps)}
+
+
+def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
+    """Fit the strokes into budget seconds. Returns ordered drawn strokes with times (fractions of total),
+    segments, per-part [start, end] fractions and counts."""
+    base, cap = LINE_SPEED * speed, LINE_SPEED * speed * SPEED_FACTOR
+    for stroke in strokes:
+        stroke['fade'] = stroke['tier'] == TEXTURE
+    ordered, _ = order(strokes, part_count, tip)
+    demotable = sorted([stroke for stroke in ordered if stroke['tier'] in (STRUCTURE, DETAIL)], key=lambda s: (-s['tier'], s['length']))
+    while demotable and line_seconds(ordered, cap, fps, cap * DETAIL_BOOST) > budget:
+        chunk = demotable[:max(1, len(demotable) // 12)]
+        demotable = demotable[len(chunk):]
+        for stroke in chunk:
+            stroke['fade'] = True
+        ordered, _ = order(strokes, part_count, tip)
+    low, high = base, cap
+    if line_seconds(ordered, base, fps) <= budget:
+        speed_used = max(base / 1.6, base * line_seconds(ordered, base, fps) / max(budget, 1e-6))
+    else:
+        if line_seconds(ordered, cap, fps, cap * DETAIL_BOOST) > budget:
+            high = cap * 64
+        for _ in range(48):
+            middle = (low + high) / 2
+            pressure = min(1., (middle - base) / max(1e-6, cap - base))
+            if line_seconds(ordered, middle, fps, middle * (1 + (DETAIL_BOOST - 1) * pressure)) > budget:
+                low = middle
+            else:
+                high = middle
+        speed_used = high
+    pressure = min(1., max(0., (speed_used - base) / max(1e-6, cap - base)))
+    detail_speed = speed_used * (1 + (DETAIL_BOOST - 1) * pressure)
+    segments, cursor, previous, parts = [], start, None, []
+    for part in range(part_count):
+        part_start = cursor
+        mine = [stroke for stroke in ordered if stroke['part'] == part]
+        for stroke in mine:
+            if previous is not None:
+                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous)) * (.9 + .2 * hashed(stroke['index']))
+                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
+                                 'points': [previous.tolist(), stroke['points'][0].tolist()]})
+                cursor += lift
+            seconds = duration(stroke, detail_speed if stroke['tier'] == DETAIL else speed_used, fps)
+            fraction = time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')
+            stroke['times'] = (cursor + seconds * fraction) / total
+            segments.append({'kind': 'ink', 'start': cursor / total, 'end': (cursor + seconds) / total, 'profile': 'minjerk',
+                             'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
+            cursor += seconds
+            previous = stroke['points'][-1]
+        faded = [stroke for stroke in strokes if stroke['fade'] and stroke['part'] == part]
+        if faded and not mine:
+            cursor += FADE_SECONDS
+        # Undrawn texture of a part materialises softly at the end of that part's own drawing time.
+        for stroke in faded:
+            stroke['fade_start'] = max(part_start, cursor - FADE_SECONDS) / total
+            stroke['fade_ramp'] = max(cursor / total - stroke['fade_start'], 1e-4)
+        parts.append([part_start / total, cursor / total])
+    end = cursor / total
+    counts = {'drawn_stroke_count': len(ordered), 'faded_stroke_count': sum(s['fade'] for s in strokes),
+              'faded_texture_count': sum(s['fade'] and s['tier'] == TEXTURE for s in strokes),
+              'faded_overflow_count': sum(s['fade'] and s['tier'] != TEXTURE for s in strokes),
+              'line_speed_px_s': round(speed_used, 1), 'speed_over_cap': bool(speed_used > cap * 1.001),
+              'drawn_fast_count': sum(s['tier'] == DETAIL and pressure > 0 for s in ordered)}
+    return ordered, segments, parts, end, counts
+
+
+def taper(stroke):
+    distances = calculate_lengths(stroke['points'])
+    reach = max(1., min(.15 * distances[-1], 18.))
+    envelope = np.clip(np.minimum(distances, distances[-1] - distances) / reach, 0, 1)
+    return .3 + .7 * envelope * envelope * (3 - 2 * envelope)
+
+
+def stamp(stroke, shape, alpha, color, hit, touch, owner, times, ramp, opacity):
+    radius = stroke['radius'] * taper(stroke)
+    for k, ((x, y), r) in enumerate(zip(stroke['points'], radius)):
+        left, right = int(max(0, x - r - 2)), int(min(shape[1], x + r + 3))
+        top, bottom = int(max(0, y - r - 2)), int(min(shape[0], y + r + 3))
+        if right <= left or bottom <= top:
+            continue
+        ys, xs = np.ogrid[top:bottom, left:right]
+        coverage = np.clip(r + .5 - np.hypot(xs - x, ys - y), 0, 1) * opacity[k]
+        window = (slice(top, bottom), slice(left, right))
+        stronger = coverage > alpha[window]
+        color[window][stronger] = stroke['color'][k]
+        np.maximum(alpha[window], coverage, out=alpha[window])
+        for target, mask in ((hit, coverage > .3), (touch, coverage > 0)):
+            earlier = mask & (times[k] < target[window])
+            target[window][earlier] = times[k]
+            if target is hit:
+                owner[window][earlier] = stroke['part']
+                ramp[window][earlier] = stroke.get('fade_ramp', 0.) if stroke['fade'] else 0.
+
+
+def render(shape, strokes):
+    """Draw the line layer: variable width from the source ink, pressure taper, slight opacity variation.
+    Each pixel's reveal time is when the nib passes it (or the soft fade start for undrawn texture)."""
+    alpha = np.zeros(shape, np.float32)
+    color = np.zeros(shape + (3,), np.float32)
+    hit = np.full(shape, np.inf, np.float32)
+    touch = np.full(shape, np.inf, np.float32)
+    owner = np.full(shape, -1, np.int16)
+    ramp = np.zeros(shape, np.float32)
+    for stroke in strokes:
+        count = len(stroke['points'])
+        if stroke['fade']:
+            times = np.full(count, stroke['fade_start'], np.float32)
+            opacity = np.full(count, .9)
+        else:
+            times = stroke['times']
+            opacity = (.9 + .1 * hashed(stroke['index'] + 7)) * (1 + .05 * np.sin(np.linspace(0, 3, count) + stroke['index']))
+        stamp(stroke, shape, alpha, color, hit, touch, owner, times, ramp, np.clip(opacity, 0, 1))
+    touched_only = ~np.isfinite(hit) & np.isfinite(touch)
+    if touched_only.any():
+        _, nearest = ndimage.distance_transform_edt(~np.isfinite(hit), return_indices=True)
+        owner[touched_only] = owner[nearest[0], nearest[1]][touched_only]
+        ramp[touched_only] = ramp[nearest[0], nearest[1]][touched_only]
+        hit[touched_only] = touch[touched_only]
+    return color, alpha, hit, ramp, owner
+
+
+def simplify(points, epsilon):
+    """Ramer-Douglas-Peucker polyline simplification."""
+    if len(points) < 3:
+        return points
+    direction = points[-1] - points[0]
+    norm = np.linalg.norm(direction)
+    offsets = points - points[0]
+    distances = np.abs(direction[0] * offsets[:, 1] - direction[1] * offsets[:, 0]) / norm if norm > 1e-9 else np.linalg.norm(offsets, axis=1)
+    k = int(np.argmax(distances))
+    if distances[k] <= epsilon:
+        return points[[0, -1]]
+    return np.vstack([simplify(points[:k + 1], epsilon)[:-1], simplify(points[k:], epsilon)])
+
+
+def sketch_strokes(owners, alpha, part_count):
+    """Light construction pass: each part's silhouette simplified to a few straight-ish segments with a small wobble."""
+    from line_topology import graph, resample, trace
+    from stroke_paths import thin_ink
+    strokes = []
+    for part in range(part_count):
+        labels, count = ndimage.label(ndimage.binary_opening((owners == part) & (alpha > 30), iterations=2))
+        sizes = np.bincount(labels.ravel())
+        sizes[0] = 0
+        if not count or sizes.max() < 400:
+            continue
+        shape = ndimage.binary_fill_holes(labels == sizes.argmax())
+        paths = trace(graph(thin_ink(shape & ~ndimage.binary_erosion(shape))))
+        if not paths:
+            continue
+        rough = simplify(max(paths, key=len), max(3., .05 * math.sqrt(sizes.max())))
+        wobble = np.array([[hashed(part * 31 + k) - .5, hashed(part * 17 + k + 5) - .5] for k in range(len(rough))]) * 4
+        points = resample(rough + wobble)
+        strokes.append({'points': points, 'part': part, 'radius': np.full(len(points), .8), 'fade': False,
+                        'color': np.full((len(points), 3), 120.), 'index': part, 'tier': SILHOUETTE,
+                        'weights': weighted_lengths(points)})
+    return strokes

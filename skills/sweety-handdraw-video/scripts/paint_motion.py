@@ -1,137 +1,297 @@
-"""Build marker passes and reveal pixels only where the moving tip has passed."""
+"""Color like a person with a marker: per part, per color region, one continuous zigzag along the
+region's principal axis (rounded turns, no lift inside a region), then a few broad soft shading strokes."""
 import math
 import numpy as np
 from scipy import ndimage
-from PIL import Image
+from line_drawing import SPEED_FACTOR, lift_seconds, weighted_lengths
+
+FILL_SPEED = 700.     # px/s of marker travel for a person coloring at 1080p
+SHADE_SECONDS = .35   # per shaded part, at human pace
+SHADE_RAMP = .3       # seconds over which a broad soft stroke blends flat color into the source
+SCALES = (1., 1.5, 2., 3.)
 
 
-def path_lengths(points):
-    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+def inpaint_lines(pixels, line_zone):
+    """Replace ink (and its anti-aliased halo) with the nearest paint so lines live only in the line layer."""
+    if not line_zone.any() or line_zone.all():
+        return pixels.copy()
+    _, nearest = ndimage.distance_transform_edt(line_zone, return_indices=True)
+    return pixels[nearest[0], nearest[1]]
 
 
-def stamp(mask, point, radius, target, value):
-    x, y = point
-    left, right = max(0, math.floor(x - radius)), min(mask.shape[1], math.ceil(x + radius) + 1)
-    top, bottom = max(0, math.floor(y - radius)), min(mask.shape[0], math.ceil(y + radius) + 1)
-    if right <= left or bottom <= top:
-        return
-    ys, xs = np.ogrid[top:bottom, left:right]
-    footprint = ((xs - x) ** 2 + (ys - y) ** 2 <= radius ** 2) & mask[top:bottom, left:right]
-    patch = target[top:bottom, left:right]
-    patch[footprint] = np.minimum(patch[footprint], value)
+def palette(colors, count=3, rounds=8, merge=28.):
+    """Small k-means; clusters whose colors are perceptually close are merged (noise is not a region)."""
+    luminance = colors @ [.299, .587, .114]
+    order = np.argsort(luminance)
+    centers = np.array([colors[order[int(q * (len(colors) - 1))]] for q in np.linspace(.1, .9, count)])
+    for _ in range(rounds):
+        labels = np.argmin(((colors[:, None] - centers[None]) ** 2).sum(2), 1)
+        centers = np.array([colors[labels == k].mean(0) if (labels == k).any() else centers[k] for k in range(count)])
+    target = list(range(count))
+    for first in range(count):
+        for second in range(first + 1, count):
+            if np.linalg.norm(centers[first] - centers[second]) < merge:
+                target = [target[first] if value == target[second] else value for value in target]
+    return np.array(target)[labels]
 
 
-def regional_passes(mask, region_id):
-    ys, xs = np.where(mask)
-    coordinates = np.c_[xs, ys].astype(float)
-    center = coordinates.mean(axis=0)
-    if len(coordinates) < 50:
-        point = coordinates[np.argmin(np.linalg.norm(coordinates - center, axis=1))]
-        return [(np.array([point, point + [.3, .2]]), 10.0)]
-    eigenvalues, eigenvectors = np.linalg.eigh(np.cov(coordinates.T))
-    axis = eigenvectors[:, -1]
-    angle = math.atan2(axis[1], axis[0]) + .16 * math.sin(region_id * 1.71)
-    direction = np.array([math.cos(angle), math.sin(angle)])
-    across = np.array([-direction[1], direction[0]])
-    along_values = (coordinates - center) @ direction
-    across_values = (coordinates - center) @ across
-    radius = float(np.clip(math.sqrt(len(coordinates)) / 7, 10, 20))
-    lower, upper = across_values.min(), across_values.max()
-    rows = max(1, math.ceil((upper - lower) / (radius * 1.35)))
-    offsets = np.linspace(lower + min(radius * .42, (upper - lower) / 2),
-                          upper - min(radius * .42, (upper - lower) / 2), rows)
-    passes = []
-    for row_index, offset in enumerate(offsets):
-        band = np.abs(across_values - offset) <= radius * .86
-        projected = np.sort(np.unique(np.rint(along_values[band])))
-        if not len(projected):
+def region_pixels(region, image):
+    (left, top), (height, width) = region['offset'], region['mask'].shape
+    return image[top:top + height, left:left + width][region['mask']]
+
+
+def color_regions(rgb, visible, owners, part_count, labels=None):
+    """Regions to paint: the model's region map when given, else palette regions per part.
+    Specks are absorbed by their nearest region instead of becoming separate passes."""
+    regions = []
+    for part in range(part_count):
+        mask = visible & (owners == part)
+        area = int(mask.sum())
+        if not area:
             continue
-        runs = np.split(projected, np.where(np.diff(projected) > radius * 1.7)[0] + 1)
-        if row_index % 2:
-            runs = runs[::-1]
-        for run in runs:
-            first, last = run[0] - 1, run[-1] + 1
-            count = max(2, math.ceil((last - first) / 2.5) + 1)
-            along = np.linspace(first, last, count)
-            if row_index % 2:
-                along = along[::-1]
-            bend = 1.5 * np.sin(np.linspace(0, math.pi, count))
-            points = center + along[:, None] * direction + (offset + bend)[:, None] * across
-            passes.append((points, radius))
-    return passes
+        cells = np.argwhere(mask)
+        (top, left), (bottom, right) = cells.min(0), cells.max(0) + 1
+        crop = (slice(top, bottom), slice(left, right))
+        local = mask[crop]
+        found = np.zeros(local.shape, np.int32)
+        if labels is not None:
+            found[local] = labels[crop][local]
+        elif area >= 120:
+            clusters = np.zeros(local.shape, np.int32)
+            clusters[local] = palette(rgb[crop][local].astype(float)) + 1
+            for cluster in np.unique(clusters[local]):
+                pieces, count = ndimage.label(ndimage.binary_opening(clusters == cluster, iterations=2))
+                sizes = np.bincount(pieces.ravel())
+                for piece in range(1, count + 1):
+                    if sizes[piece] >= max(400, .03 * area):
+                        found[pieces == piece] = found.max() + 1
+        sizes = np.bincount(found[local], minlength=found.max() + 1)
+        large = [value for value in range(1, len(sizes)) if sizes[value] >= max(60, .01 * area)]
+        found[~np.isin(found, large)] = 0
+        if not large:
+            found[local], large = 1, [1]
+        _, nearest = ndimage.distance_transform_edt(found == 0, return_indices=True)
+        found = np.where(local, found[nearest[0], nearest[1]], 0)
+        for value in large:
+            region = {'part': part, 'offset': np.array([left, top]), 'mask': found == value}
+            region.update(area=int(region['mask'].sum()), flat=np.median(region_pixels(region, rgb), axis=0))
+            regions.append(region)
+    regions.sort(key=lambda region: (region['part'], -region['area']))
+    return regions
 
 
-def build_painting(fill_mask, previous_tip, start, duration=6.9, pixels=None):
-    if not fill_mask.any():
-        return np.full(fill_mask.shape, np.inf, dtype=np.float32), [], {
-            'region_count': 0, 'brush_pass_count': 0, 'maximum_brush_radius': 0}
-    # Palette components keep clothes, skin and furniture in separate painting passes.
-    palette = np.array(Image.fromarray(pixels[:, :, :3]).quantize(colors=8, method=Image.Quantize.FASTOCTREE))
-    solid_interior = ndimage.distance_transform_edt(fill_mask & (pixels[:, :, 3] > 240)) > 3
-    labels = np.zeros(fill_mask.shape, dtype=np.int32)
-    count = 0
-    for color_id in np.unique(palette):
-        grouped = ndimage.binary_closing((palette == color_id) & solid_interior, iterations=3)
-        components, component_count = ndimage.label(grouped)
-        sizes = np.bincount(components.ravel())
-        for component in range(1, component_count + 1):
-            if sizes[component] < 220:
-                continue
-            count += 1
-            labels[components == component] = count
-    if count == 0:
-        labels, count = ndimage.label(fill_mask)
-    _, nearest = ndimage.distance_transform_edt(labels == 0, return_indices=True)
-    labels = labels[nearest[0], nearest[1]]
-    pending = [label for label in range(1, count + 1) if np.any(fill_mask & (labels == label))]
-    centers = {label: ndimage.center_of_mass(fill_mask & (labels == label)) for label in pending}
-    previous = np.asarray(previous_tip, dtype=float)
-    operations = []
-    covered = np.full(fill_mask.shape, np.inf, dtype=np.float32)
-    while pending:
-        region_id = min(pending, key=lambda label: (round(centers[label][0]/16),centers[label][1]))
-        pending.remove(region_id)
-        mask = (labels == region_id) & fill_mask
-        passes = regional_passes(mask, region_id)
-        for points, radius in passes:
-            distance = np.linalg.norm(previous - points[0])
-            # A lifted tip travels between passes; each pass itself leaves a solid marker footprint.
-            operations.append({'kind':'travel', 'points':np.array([previous, points[0]]), 'weight':max(3.0, distance * .38)})
-            lengths = path_lengths(points)
-            operations.append({'kind':'color', 'points':points, 'lengths':lengths, 'radius':radius,
-                               'region':region_id, 'weight':max(10.0, lengths[-1])})
-            for point in points:
-                stamp(mask, point, radius, covered, 0)
-            previous = points[-1]
-        remaining = mask & ~np.isfinite(covered)
-        while remaining.any():
-            ys, xs = np.where(remaining)
-            nearest = np.argmin((xs - previous[0]) ** 2 + (ys - previous[1]) ** 2)
-            point = np.array([xs[nearest], ys[nearest]], dtype=float)
-            points = np.array([point, point + [.5, .3]])
-            operations.append({'kind':'travel','points':np.array([previous, point]), 'weight':max(3.0,np.linalg.norm(point - previous) * .38)})
-            operations.append({'kind':'color','points':points,'lengths':path_lengths(points),'radius':15.,'region':region_id,'weight':10.})
-            stamp(mask, point, 15, covered, 0)
-            stamp(mask, points[-1], 15, covered, 0)
-            previous = points[-1]
-            remaining = mask & ~np.isfinite(covered)
-    total_weight = sum(operation['weight'] for operation in operations)
-    reveal_times = np.full(fill_mask.shape, np.inf, dtype=np.float32)
-    segments = []
-    cursor = start
-    for operation in operations:
-        interval = duration * operation['weight'] / total_weight
-        points = operation['points']
-        segment = {'kind':operation['kind'],'start':cursor,'end':cursor + interval,'points':points.tolist()}
-        if operation['kind'] == 'color':
-            lengths = operation['lengths']
-            segment.update(lengths=lengths.tolist(),radius=operation['radius'],region=operation['region'])
-            mask = (labels == operation['region']) & fill_mask
-            for point, distance in zip(points, lengths):
-                timestamp = cursor + interval * distance / max(.001,lengths[-1])
-                stamp(mask, point, operation['radius'], reveal_times, timestamp)
-        segments.append(segment)
-        cursor += interval
-    assert np.isfinite(reveal_times[fill_mask]).all(), 'Unpainted pixels must receive a real brush pass.'
-    return reveal_times, segments, {'region_count':count,'brush_pass_count':sum(s['kind'] == 'color' for s in segments),
-                                   'maximum_brush_radius':max(s.get('radius',0) for s in segments)}
+def axes(points):
+    center = points.mean(0)
+    axis = np.linalg.eigh(np.cov(points.T))[1][:, -1] if len(points) > 3 else np.array([1., 0.])
+    axis = axis if (axis[0] > 0 if abs(axis[0]) >= abs(axis[1]) else axis[1] > 0) else -axis
+    across = np.array([-axis[1], axis[0]])
+    return center, axis, (across if (across[1] > 0 if abs(across[1]) >= abs(across[0]) else across[0] > 0) else -across)
+
+
+def zigzag(region, radius):
+    """Continuous boustrophedon cells: rows along the principal axis, stepped across it with rounded
+    turns; a row that no longer overlaps the previous one starts a new cell (the only lifts in a region)."""
+    ys, xs = np.nonzero(region['mask'])
+    points = np.c_[xs, ys].astype(float) + region['offset']
+    center, axis, across = axes(points)
+    along_values, across_values = (points - center) @ axis, (points - center) @ across
+    spacing = 1.25 * radius
+    rows = []
+    for offset in np.arange(across_values.min() + .45 * radius, across_values.max() + .45 * radius, spacing):
+        band = np.sort(along_values[np.abs(across_values - offset) <= .65 * spacing])
+        if len(band):
+            runs = np.split(band, np.where(np.diff(band) > 2 * radius)[0] + 1)
+            rows.append([(offset, run[0] - .3 * radius, run[-1] + .3 * radius) for run in runs])
+    unused = {(row, k) for row, runs in enumerate(rows) for k in range(len(runs))}
+    cells, step, bulge = [], max(1.5, radius / 4), .35 * spacing
+    position = lambda along, offset: center + along * axis + offset * across
+    while unused:
+        row, k = min(unused)
+        chain = [(row, k)]
+        unused.discard((row, k))
+        while row + 1 < len(rows):
+            low, high = rows[row][k][1:]
+            overlaps = [(min(high, b) - max(low, a), j) for j, (_, a, b) in enumerate(rows[row + 1])
+                        if (row + 1, j) in unused and min(high, b) > max(low, a)]
+            if not overlaps:
+                break
+            row, k = row + 1, max(overlaps)[1]
+            chain.append((row, k))
+            unused.discard((row, k))
+        polyline, previous = [], None
+        for index, (row, k) in enumerate(chain):
+            offset, a, b = rows[row][k]
+            if index % 2:
+                a, b = b, a
+            if previous is not None:
+                end, end_offset, direction = previous
+                turn = max(end, a) + bulge if direction > 0 else min(end, a) - bulge
+                u = np.linspace(0, 1, 10)[1:-1, None]
+                start, middle, finish = position(end, end_offset), position(turn, (end_offset + offset) / 2), position(a, offset)
+                polyline.append((1 - u) ** 2 * start + 2 * u * (1 - u) * middle + u * u * finish)
+            along = np.linspace(a, b, max(2, int(abs(b - a) / step) + 1))
+            polyline.append(position(along[:, None], offset))
+            previous = (b, offset, 1 if b >= a else -1)
+        cells.append(np.vstack(polyline))
+    return cells
+
+
+def plan(regions, scale):
+    for region in regions:
+        region['radius'] = float(np.clip(math.sqrt(region['area']) / 7, 7, 24) * scale)
+        region['cells'] = zigzag(region, region['radius'])
+
+
+def shaded_parts(regions, rgb, part_count):
+    """Parts whose source differs visibly from flat color get a short shading pass."""
+    result = []
+    for part in range(part_count):
+        mine = [region for region in regions if region['part'] == part]
+        if mine and np.average([np.abs(region_pixels(region, rgb) - region['flat']).mean() for region in mine],
+                               weights=[region['area'] for region in mine]) > 6:
+            result.append(part)
+    return result
+
+
+def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=1., fps=30, record=False):
+    """Lay out every marker pass and shading band in order; returns (segments, parts, bands, end seconds, tip)."""
+    tip = np.asarray(tip, float)
+    segments, cursor, parts, bands = [], start, [], []
+    shade_time = SHADE_SECONDS * min(1., FILL_SPEED * 1.5 / pace)
+
+    def travel(destination):
+        nonlocal cursor
+        lift = lift_seconds(np.linalg.norm(destination - tip)) * lifts
+        segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
+                         'points': [tip.tolist(), destination.tolist()]})
+        cursor += lift
+
+    for part in range(part_count):
+        part_start = cursor
+        for region in [region for region in regions if region['part'] == part]:
+            cells, passes = list(region['cells']), []
+            while cells:
+                cell = min(cells, key=lambda c: min(np.linalg.norm(c[0] - tip), np.linalg.norm(c[-1] - tip)))
+                cells = [c for c in cells if c is not cell]
+                if np.linalg.norm(cell[-1] - tip) < np.linalg.norm(cell[0] - tip):
+                    cell = cell[::-1]
+                travel(cell[0])
+                weights = weighted_lengths(cell)
+                seconds = max(2. / fps, weights[-1] / pace)
+                segments.append({'kind': 'color', 'start': cursor / total, 'end': (cursor + seconds) / total,
+                                 'points': cell.tolist(), 'lengths': weights.tolist(), 'radius': region['radius'] + 2.5})
+                passes.append((cell, (cursor + seconds * weights / max(1e-6, weights[-1])) / total))
+                cursor += seconds
+                tip = cell[-1]
+            if record:
+                region.update(passes=passes, end=cursor / total, window=3 * region['radius'] / pace / total)
+        if part in shading:
+            mine = np.vstack([np.c_[np.nonzero(r['mask'])[::-1]].astype(float) + r['offset'] for r in regions if r['part'] == part])
+            center, axis, across = axes(mine)
+            along, side = (mine - center) @ axis, (mine - center) @ across
+            count = int(np.clip(round(np.ptp(side) / 90), 1, 4))
+            edges = np.linspace(side.min(), side.max(), count + 1)
+            band = {'part': part, 'center': center, 'axis': axis, 'across': across, 'edges': edges,
+                    'along': (along.min(), along.max()), 'times': []}
+            for index in range(count):
+                points = center + np.linspace(along.min(), along.max(), 24)[:, None] * axis + (edges[index] + edges[index + 1]) / 2 * across
+                travel(points[0])
+                seconds = shade_time / count
+                segments.append({'kind': 'shade', 'start': cursor / total, 'end': (cursor + seconds) / total, 'points': points.tolist(),
+                                 'lengths': weighted_lengths(points).tolist(), 'radius': float(np.ptp(edges) / count / 2 + 4)})
+                band['times'].append((cursor / total, (cursor + seconds) / total))
+                cursor += seconds
+                tip = points[-1]
+            bands.append(band)
+        parts.append([part_start / total, cursor / total])
+    return segments, parts, bands, cursor, tip
+
+
+def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
+    """Seconds for: base marker at human pace with shading; a 1.5x marker at the cap with shading;
+    the broadest marker at the cap without shading."""
+    shading = shaded_parts(regions, rgb, part_count)
+    result = {}
+    for key, scale, pace, shade in (('required', SCALES[0], FILL_SPEED * speed, shading), ('moderate', SCALES[1], FILL_SPEED * speed * SPEED_FACTOR, shading),
+                                    ('minimum', SCALES[-1], FILL_SPEED * speed * SPEED_FACTOR, [])):
+        plan(regions, scale)
+        result[key] = timeline(regions, shade, part_count, tip, pace, fps=fps)[3]
+    return result
+
+
+def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=30):
+    """Pick marker size, pace and lift length so the fill fits the budget: bigger marker first, then pace
+    up to the cap; shading is dropped before the cap is exceeded. Returns segments, per-part [start, end]
+    fractions, shading bands, end fraction, pen tip and counts."""
+    shading = shaded_parts(regions, rgb, part_count)
+    base, cap = FILL_SPEED * speed, FILL_SPEED * speed * SPEED_FACTOR
+    seconds = lambda pace, lifts=1., shade=None: timeline(regions, shading if shade is None else shade, part_count, tip, pace, lifts, fps=fps)[3]
+    for scale in SCALES:
+        plan(regions, scale)
+        if seconds(cap) <= budget:
+            break
+    if seconds(cap) > budget:
+        shading = []
+    lifts = next((value for value in (1., .7, .5) if seconds(cap * 8, value) <= budget), .5)
+    low, high = base / 1.6, cap * 8
+    if seconds(low, lifts) <= budget:
+        high = low
+    for _ in range(40):
+        if high - low < 1:
+            break
+        middle = (low + high) / 2
+        low, high = (middle, high) if seconds(middle, lifts) > budget else (low, middle)
+    segments, parts, bands, end, tip = timeline(regions, shading, part_count, tip, high, lifts, start, total, fps, record=True)
+    counts = {'fill_regions': len(regions), 'fill_passes': sum(len(r['cells']) for r in regions),
+              'marker_radius_scale': scale, 'fill_speed_px_s': round(high, 1), 'fill_over_cap': bool(high > cap * 1.001),
+              'shaded_parts': len(shading)}
+    return segments, parts, bands, end / total, tip, counts
+
+
+def render(shape, regions, bands, owners):
+    """Marker reveal maps: first touch time and its coverage (soft, grainy edge), full coverage time,
+    flat colors, and per-pixel shading time (flat -> source) for shaded parts."""
+    first = np.full(shape, np.inf, np.float32)
+    cover = np.zeros(shape, np.float32)
+    full = np.full(shape, np.inf, np.float32)
+    flat = np.zeros(shape + (3,), np.float32)
+    grain = (.8 + .2 * np.random.default_rng(7).random(shape)).astype(np.float32)
+    for region in regions:
+        (left, top), (height, width) = region['offset'], region['mask'].shape
+        mask, radius = region['mask'], region['radius']
+        box = (slice(top, top + height), slice(left, left + width))
+        flat[box][mask] = region['flat']
+        first_local, cover_local, full_local, grain_local = first[box], cover[box], full[box], grain[box]
+        for cell, times in region['passes']:
+            for (x, y), when in zip(cell - region['offset'], times):
+                x0, x1 = int(max(0, x - radius - 3)), int(min(width, x + radius + 4))
+                y0, y1 = int(max(0, y - radius - 3)), int(min(height, y + radius + 4))
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                ys, xs = np.ogrid[y0:y1, x0:x1]
+                window = (slice(y0, y1), slice(x0, x1))
+                coverage = np.clip((radius + 2 - np.hypot(xs - x, ys - y)) / 4, 0, 1) * mask[window]
+                touched = (coverage > .1) & ~np.isfinite(first_local[window])
+                first_local[window][touched] = when
+                passing = (coverage > 0) & (when - first_local[window] <= region['window'])
+                cover_local[window][passing] = np.maximum(cover_local[window], coverage * grain_local[window])[passing]
+                solid = (coverage >= .85) & ~np.isfinite(full_local[window])
+                full_local[window][solid] = when
+        missing = mask & ~np.isfinite(first_local)
+        if missing.any():
+            _, nearest = ndimage.distance_transform_edt(~(np.isfinite(first_local) & mask), return_indices=True)
+            first_local[missing] = first_local[nearest[0], nearest[1]][missing]
+            cover_local[missing] = 1
+        late = mask & ~np.isfinite(full_local)
+        full_local[late] = np.maximum(first_local[late], region['end'])
+    shade = full.copy()
+    for band in bands:
+        ys, xs = np.nonzero(owners == band['part'])
+        relative = np.c_[xs, ys].astype(float) - band['center']
+        side, along = relative @ band['across'], relative @ band['axis']
+        index = np.clip(np.searchsorted(band['edges'], side) - 1, 0, len(band['times']) - 1)
+        low, high = band['along']
+        fraction = np.clip((along - low) / max(1., high - low), 0, 1) * .8
+        starts, ends = np.array(band['times']).T
+        shade[ys, xs] = starts[index] + fraction * (ends[index] - starts[index])
+    return first, cover, full, flat, shade

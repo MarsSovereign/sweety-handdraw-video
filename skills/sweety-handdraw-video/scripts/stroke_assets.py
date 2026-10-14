@@ -4,8 +4,13 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
-from paint_motion import build_painting
-
+import hashlib
+import illustration_layers
+import line_drawing
+import line_topology
+import lineart_gate
+import paint_motion
+from motion_profile import time_fraction
 import stroke_paths as stroke_utils
 
 ASSET_DIRECTORY = None
@@ -206,7 +211,8 @@ def build_brush(name, width, height, color, style='highlight', line_width=None, 
     return save_asset(name,rgba,reveal,segments,{'type':'marker_'+style})
 
 
-def build_illustration(name, source_path, max_width, max_height, crop=None, parts=None, outline_mask_path=None, seconds=None):
+def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_path=None):
+    """Crop, remove a white background, fit the box, and find the drawable outline (shared with region marks)."""
     artwork=Image.open(source_path).convert('RGBA')
     source_size = artwork.size
     if crop is not None:
@@ -226,9 +232,8 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     red,green,blue=[pixels[:,:,channel].astype(float) for channel in range(3)]
     cool_ink=(blue>=red+4)&(blue>=green-4)&(red<218)
     dark=((maximum<125)|cool_ink)&(alpha>30)
-    depth=ndimage.distance_transform_edt(dark)
-    outline=dark&(depth<5.2)
-    ink_weight=dark.astype(float)*np.clip((6.-depth)/1.,0,1)
+    outline=dark&(ndimage.distance_transform_edt(dark)<5.2)
+    support=(maximum<165)&(alpha>30)
     if outline_mask_path is not None:
         explicit = Image.open(outline_mask_path).convert('L')
         if explicit.size != source_size:
@@ -237,15 +242,15 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
             explicit = explicit.crop(tuple(crop))
         explicit = explicit.resize(artwork.size,Image.Resampling.NEAREST)
         outline = (np.array(explicit)>127)&(alpha>0)
-        ink_weight = outline.astype(float)
-    fill_mask=(alpha>0)&(ink_weight<.99)
-    ys, xs = np.where(alpha > 0)
-    if not len(xs):
+    if not (alpha>0).any():
         raise ValueError('Illustration is empty after background removal')
-    if not parts:
-        raise ValueError('Illustrations require model-designed semantic parts with ordered normalized polygons')
+    return {'artwork':artwork,'pixels':pixels,'alpha':alpha,'outline':outline,'support':support}
+
+
+def polygon_owners(parts, artwork, alpha):
     owners = np.full(alpha.shape, -1, dtype=np.int16)
-    part_masks, names = [], []
+    names = []
+    hsv = None
     for index, part in enumerate(parts):
         if not part.get('id') or part['id'] in names:
             raise ValueError('Every semantic part needs a unique id')
@@ -268,59 +273,170 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         for exclusion in part.get('exclude_hsv', []):
             if len(exclusion)!=4 or not (0<=exclusion[0]<=exclusion[1]<=360 and 0<=exclusion[2]<=1 and 0<=exclusion[3]<=1):
                 raise ValueError('exclude_hsv requires [hue_min, hue_max, saturation_min, value_min]')
-            hsv=np.asarray(artwork.convert('RGB').convert('HSV'),dtype=float)
+            hsv=np.asarray(artwork.convert('RGB').convert('HSV'),dtype=float) if hsv is None else hsv
             hue=hsv[:,:,0]*360/255
-            excluded=(hue>=exclusion[0])&(hue<=exclusion[1])&(hsv[:,:,1]>=exclusion[2]*255)&(hsv[:,:,2]>=exclusion[3]*255)
-            mask &= ~excluded
+            mask &= ~((hue>=exclusion[0])&(hue<=exclusion[1])&(hsv[:,:,1]>=exclusion[2]*255)&(hsv[:,:,2]>=exclusion[3]*255))
         if not mask.any():
             raise ValueError(f'Empty semantic part: {part["id"]}')
         owners[mask] = index
-        part_masks.append(mask)
     if ((alpha>0)&(owners<0)).any():
         raise ValueError('Semantic parts do not cover every visible pixel; inspect and repair masks')
-    for part, mask in zip(parts, part_masks):
-        if not (outline & mask).any():
-            raise ValueError('Part has no drawable outline; prepare a contour layer/mask before generation: '+part['id'])
-    ink_reveal = np.full(alpha.shape,np.inf,dtype=np.float32)
-    color_reveal = np.full(alpha.shape,np.inf,dtype=np.float32)
-    segments, part_reports = [], []
-    part_paths = [ordered_paths(outline&mask) for mask in part_masks]
-    ink_weights = [sum(max(1.,lengths(path)[-1]) for path in paths) for paths in part_paths]
-    ink_duration = .59 if fill_mask.any() else 1.
-    cursor = 0.
-    previous_tip = np.array([xs.mean(),ys.mean()])
-    for index,(mask,paths,weight) in enumerate(zip(part_masks,part_paths,ink_weights)):
-        interval = ink_duration*weight/max(1.,sum(ink_weights))
-        local,strokes = time_paths(paths,alpha.shape,cursor,interval*.96)
-        ink_reveal[mask] = local[mask]
-        for stroke in strokes:
-            stroke.update(part_id=names[index],part_index=index,phase='outline')
-        segments.extend(strokes)
-        part_reports.append({'id':names[index],'index':index,'outline_start':cursor,'outline_end':cursor+interval})
-        if paths:
-            previous_tip=paths[-1][-1]
-        cursor+=interval
-    fill_weights = [math.sqrt(int((mask&fill_mask).sum())) for mask in part_masks]
-    fill_start = ( .61 if sum(ink_weights) else 0. ) if fill_mask.any() else 1.
-    cursor=fill_start
-    painting={'region_count':0,'brush_pass_count':0,'maximum_brush_radius':0}
-    for index,(mask,weight) in enumerate(zip(part_masks,fill_weights)):
-        interval=(1.-fill_start)*weight/max(1.,sum(fill_weights))
-        local,strokes,statistics=build_painting(mask&fill_mask,previous_tip,cursor,interval*.96,pixels)
-        color_reveal[mask]=local[mask]
-        for stroke in strokes:
-            stroke.update(part_id=names[index],part_index=index,phase='fill')
-        segments.extend(strokes)
-        part_reports[index].update(fill_start=cursor,fill_end=cursor+interval)
-        if strokes:
-            previous_tip=np.array(strokes[-1]['points'][-1])
-        for field in ('region_count','brush_pass_count'):
-            painting[field]+=statistics[field]
-        painting['maximum_brush_radius']=max(painting['maximum_brush_radius'],statistics['maximum_brush_radius'])
-        cursor+=interval
-    # A two-channel reveal retains sharp contours before the localized color passes.
-    Image.fromarray(pixels).save(ASSET_DIRECTORY/f'{name}.png')
-    np.savez_compressed(ASSET_DIRECTORY/f'{name}.npz',ink=ink_reveal,color=color_reveal,ink_weight=ink_weight.astype(np.float32),owners=owners)
-    metadata={'name':name,'type':'illustration','source':str(source_path),'width':artwork.width,'height':artwork.height,'segments':segments,'painting':painting,'parts':part_reports}
+    return names, owners
+
+
+def region_owners(region_map_path, part_regions, alpha, source_path):
+    """Set-of-Mark ownership: the model maps numbered regions (region_marks.py) to ordered semantic parts."""
+    if not region_map_path:
+        raise ValueError('part_regions requires the region_map written by region_marks.py')
+    data = np.load(region_map_path)
+    if 'source_sha256' in data.files and str(data['source_sha256']) != hashlib.sha256(Path(source_path).read_bytes()).hexdigest():
+        raise ValueError('Region map belongs to another image; rerun region_marks.py and relabel')
+    labels = data['labels']
+    if labels.shape != alpha.shape:
+        labels = np.array(Image.fromarray(labels.astype(np.int32)).resize((alpha.shape[1], alpha.shape[0]), Image.Resampling.NEAREST))
+    present = set(np.unique(labels[alpha > 0]).tolist()) - {0}
+    names, owners, seen = [], np.full(alpha.shape, -1, np.int16), {}
+    for index, part in enumerate(part_regions):
+        if not part.get('id') or part['id'] in names:
+            raise ValueError('Every semantic part needs a unique id')
+        names.append(part['id'])
+        numbers = [int(number) for number in part.get('regions', [])]
+        if not numbers:
+            raise ValueError(f'Empty semantic part: {part["id"]}')
+        for number in numbers:
+            if number in seen:
+                raise ValueError(f'Region {number} is assigned to both {seen[number]} and {part["id"]}')
+            if number not in present:
+                raise ValueError(f'Region {number} of {part["id"]} is not a visible region of this region map')
+            seen[number] = part['id']
+        owners[np.isin(labels, numbers)] = index
+    missing = sorted(present - set(seen))
+    if missing:
+        raise ValueError('Visible regions are not assigned to any part: ' + ', '.join(map(str, missing)) + '; add them to part_regions')
+    stray = (alpha > 0) & (owners < 0)
+    if stray.any():
+        _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
+        owners[stray] = owners[nearest[0], nearest[1]][stray]
+    return names, owners, labels
+
+
+def build_illustration(name, source_path, max_width, max_height, crop=None, parts=None, outline_mask_path=None, seconds=None,
+                       region_map_path=None, part_regions=None, lineart_exception=None, drawing=None):
+    """Draw, don't reveal: whole strokes inked part by part, then marker color and soft shading, as layers."""
+    drawing = dict(drawing or {})
+    speed = float(drawing.get('speed', 1.))
+    if not (math.isfinite(speed) and .25 <= speed <= 4):
+        raise ValueError('drawing.speed must be within 0.25..4')
+    art = prepare_artwork(source_path, max_width, max_height, crop, outline_mask_path)
+    artwork, pixels, alpha, outline = art['artwork'], art['pixels'], art['alpha'], art['outline']
+    shape, labels = alpha.shape, None
+    if part_regions:
+        names, owners, labels = region_owners(region_map_path, part_regions, alpha, source_path)
+        declared = part_regions
+    elif parts:
+        names, owners = polygon_owners(parts, artwork, alpha)
+        declared = parts
+    else:
+        raise ValueError('Illustrations require model-designed semantic parts: part_regions (region_marks.py) or ordered normalized polygons')
+    for index, part_id in enumerate(names):
+        if not (outline & (owners == index)).any():
+            raise ValueError('Part has no drawable outline; prepare a contour layer/mask before generation: '+part_id)
+    strokes, clean, skeleton, topology = line_topology.extract_strokes(outline, art['support'])
+    gate = lineart_gate.evaluate(outline, strokes, clean, skeleton)
+    if not gate['passed'] and not lineart_exception:
+        raise ValueError(lineart_gate.failure_message(gate))
+    line_drawing.classify(strokes, owners, alpha, pixels, names, {part['id'] for part in declared if part.get('key')})
+    _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
+    owners_everywhere = owners[nearest[0], nearest[1]]
+    shade_pixels = paint_motion.inpaint_lines(pixels, ndimage.binary_dilation(clean, iterations=2))
+    painted = shade_pixels[:, :, 3] > 0
+    shade_rgb = shade_pixels[:, :, :3].astype(float)
+    regions = paint_motion.color_regions(shade_rgb, painted, owners_everywhere, len(names), labels)
+    ys, xs = np.nonzero(alpha > 0)
+    tip = np.array([xs.mean(), ys.min()], dtype=float)
+    lines = line_drawing.requirements(strokes, len(names), tip, speed, FPS)
+    fill = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS) if regions else {'required': 0., 'moderate': 0., 'minimum': 0.}
+    shaded = bool(regions) and bool(paint_motion.shaded_parts(regions, shade_rgb, len(names)))
+    ramp = paint_motion.SHADE_RAMP if shaded else 0.
+    total = float(seconds) if seconds else float(np.clip(lines['required'] + fill['required'] + ramp, 1, 30))
+    sketches, segments, cursor = (line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []), [], 0.
+    if sketches:
+        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.LINE_SPEED * line_drawing.SPEED_FACTOR * 1.6 * speed))) for stroke in sketches]
+        factor = min(1., min(1.5, .12 * total) / (sum(each) + .1 * len(each)))
+        for index, (stroke, length) in enumerate(zip(sketches, each)):
+            length = max(2. / FPS, length * factor)
+            if index:
+                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + .1 * factor) / total,
+                                 'points': [sketches[index - 1]['points'][-1].tolist(), stroke['points'][0].tolist()]})
+                cursor += .1 * factor
+            stroke['times'] = (cursor + length * time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')) / total
+            segments.append({'kind': 'sketch', 'start': cursor / total, 'end': (cursor + length) / total, 'profile': 'minjerk',
+                             'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
+            cursor += length
+        tip = sketches[-1]['points'][-1]
+    available = max(.1, total - cursor - ramp)
+    # Water-fill the time: silhouette + key lines, a basic fill, every line at the cap, a moderate fill, then human pace.
+    line_budget, fill_budget, remaining = 0., 0., available
+    steps = [(lines['minimum'], 0.), (0., fill['minimum']), (lines['all_at_cap'] - lines['minimum'], 0.),
+             (0., fill['moderate'] - fill['minimum']), (lines['required'] - lines['all_at_cap'], fill['required'] - fill['moderate'])]
+    for line_step, fill_step in steps:
+        line_step, fill_step = max(0., line_step), max(0., fill_step)
+        share = min(1., remaining / max(1e-9, line_step + fill_step))
+        line_budget, fill_budget, remaining = line_budget + line_step * share, fill_budget + fill_step * share, remaining - (line_step + fill_step) * share
+    if remaining > 1e-6:
+        stretch = min(1.6, available / max(1e-6, line_budget + fill_budget))
+        line_budget, fill_budget = line_budget * stretch, fill_budget * stretch
+    ordered, line_segments, line_parts, line_end, line_counts = line_drawing.schedule(
+        strokes, len(names), tip, line_budget, cursor, total, speed, FPS)
+    segments += line_segments
+    line_rgb, line_alpha, ink, ink_ramp, ink_owner = line_drawing.render(shape, strokes)
+    tip = ordered[-1]['points'][-1] if ordered else tip
+    fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
+    if regions:
+        fill_segments, fill_parts, bands, _, tip, fill_counts = paint_motion.schedule(
+            regions, shade_rgb, len(names), tip, fill_budget, line_end * total, total, speed, FPS)
+        segments += fill_segments
+    first, cover, full, flat, shade = paint_motion.render(shape, regions, bands, owners_everywhere)
+    paint_layer = np.dstack([np.rint(flat), shade_pixels[:, :, 3]]).astype(np.uint8)
+    line_layer = np.dstack([np.rint(line_rgb), np.rint(line_alpha * 255)]).astype(np.uint8)
+    maps = {'ink': ink, 'ink_ramp': ink_ramp, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
+            'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total)}
+    sketch_layer = None
+    if sketches:
+        sketch_rgb, sketch_alpha, sketch_time, _, _ = line_drawing.render(shape, sketches)
+        sketch_layer = np.dstack([np.rint(sketch_rgb), np.rint(sketch_alpha * 120)]).astype(np.uint8)
+        maps.update(sketch=sketch_time, sketch_fade=np.array([line_end, .5 / total], np.float32))
+    # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
+    finite = lambda values: values[np.isfinite(values)]
+    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + ink_ramp).max(initial=0.), finite(full).max(initial=0.),
+                        finite(shade).max(initial=0.) + float(maps['shade_ramp'])]))
+    if ending > 1:
+        for key in ('ink', 'ink_ramp', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
+            if key in maps:
+                maps[key] = (maps[key] / ending).astype(np.float32)
+        for segment in segments:
+            segment['start'], segment['end'] = segment['start'] / ending, segment['end'] / ending
+        line_parts = [[value / ending for value in part] for part in line_parts]
+        fill_parts = [[value / ending for value in part] for part in fill_parts]
+    final = illustration_layers.compose(illustration_layers.prepare(maps, line_layer, paint_layer, shade_pixels, sketch_layer), np.float32(1e9))
+    owners_final = np.where(final[:, :, 3] > 0, owners_everywhere, -1).astype(np.int16)
+    for suffix, layer in (('line', line_layer), ('paint', paint_layer), ('shade', shade_pixels), ('sketch', sketch_layer)):
+        if layer is not None:
+            Image.fromarray(layer).save(ASSET_DIRECTORY/f'{name}-{suffix}.png')
+    Image.fromarray(final).save(ASSET_DIRECTORY/f'{name}.png')
+    np.savez_compressed(ASSET_DIRECTORY/f'{name}.npz', owners=owners_final, **maps)
+    part_reports = [{'id': part_id, 'index': index, 'outline_start': line_parts[index][0], 'outline_end': line_parts[index][1],
+                     'fill_start': fill_parts[index][0], 'fill_end': fill_parts[index][1]} for index, part_id in enumerate(names)]
+    segments.sort(key=lambda segment: segment['start'])
+    drawability = {'line_length_px': round(sum(stroke['length'] for stroke in strokes)), 'stroke_count': len(strokes),
+                   'drawn_stroke_count': line_counts['drawn_stroke_count'], 'faded_stroke_count': line_counts['faded_stroke_count'],
+                   'fill_area_px': int(painted.sum()), 'required_seconds': round(lines['required'] + fill['required'] + ramp, 2),
+                   'minimum_seconds': round(lines['minimum'] + fill['minimum'], 2), 'lineart_gate': gate}
+    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'source': str(source_path), 'width': artwork.width,
+                'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports,
+                'layers': ['paint', 'shade'] + (['sketch'] if sketches else []) + ['line'],
+                'lines': {**topology, **line_counts}, 'painting': fill_counts, 'drawability': drawability,
+                'ownership': 'regions' if part_regions else 'polygons', 'lineart_exception': lineart_exception,
+                'idle_seconds': round(max(0., total - max([segment['end'] for segment in segments] + [0.]) * total), 2)}
     (ASSET_DIRECTORY/f'{name}.json').write_text(json.dumps(metadata))
     return metadata
