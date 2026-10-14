@@ -1,5 +1,5 @@
 {
-  "default": "iapetus",
+  "default": "realistic-man",
   "voices": [
     {
       "id": "realistic-man",
@@ -32,50 +32,6 @@
       "requires_import": true,
       "requires_original_reference": true,
       "preview_kind": "film_excerpt"
-    },
-    {
-      "id": "sweet-student",
-      "name": "甜美学姐",
-      "description": "明亮亲切，适合课堂与轻科普。",
-      "reference_audio": "sweet-student.wav",
-      "reference_text": "sweet-student.txt",
-      "source": "Previously accepted synthetic reference from this workflow",
-      "preview_audio": "previews/sweet-student.wav",
-      "preview_text": "有时候，改变结果不需要更加用力。停下来，看清问题，再向前走一步。",
-      "preview_kind": "same_text"
-    },
-    {
-      "id": "iapetus",
-      "name": "Iapetus",
-      "description": "清晰、平稳，适合知识讲解与结构化信息。",
-      "reference_audio": "iapetus.wav",
-      "reference_text": "iapetus.txt",
-      "source": "User-provided synthetic Gemini Iapetus MP3",
-      "preview_audio": "previews/iapetus.wav",
-      "preview_text": "有时候，改变结果不需要更加用力。停下来，看清问题，再向前走一步。",
-      "preview_kind": "same_text"
-    },
-    {
-      "id": "calm-woman",
-      "name": "知性女讲师",
-      "description": "中低音沉静，适合知识与观点。",
-      "reference_audio": "calm-woman.wav",
-      "reference_text": "calm-woman.txt",
-      "source": "User-owned synthetic Qwen3-TTS VoiceDesign reference; no real person cloned",
-      "preview_audio": "previews/calm-woman.wav",
-      "preview_text": "有时候，改变结果不需要更加用力。停下来，看清问题，再向前走一步。",
-      "preview_kind": "same_text"
-    },
-    {
-      "id": "story-narrator",
-      "name": "故事解说",
-      "description": "已有故事解说合成参考，语速较快；与两款成片原始参考分别保留。",
-      "reference_audio": "story-narrator.wav",
-      "reference_text": "story-narrator.txt",
-      "source": "Synthetic VoxCPM2 narration generated for this task; source style from user-provided videos",
-      "preview_audio": "previews/story-narrator.wav",
-      "preview_text": "有时候，改变结果不需要更加用力。停下来，看清问题，再向前走一步。",
-      "preview_kind": "same_text"
     }
   ]
 }

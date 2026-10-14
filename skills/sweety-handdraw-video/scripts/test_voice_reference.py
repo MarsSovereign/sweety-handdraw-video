@@ -48,11 +48,11 @@ class VoiceReferenceTests(unittest.TestCase):
             voice_reference({'voice': 'bilibili-outro'}, self.root)
 
     def test_transcript_changes_are_rejected(self):
-        catalog = import_reference(self.root, 'calm-woman', '知性女讲师', self.audio, self.text)
+        catalog = import_reference(self.root, 'realistic-man', '逼真男声', self.audio, self.text, 'source_recording')
         profile = json.loads(catalog.read_text())['voices'][0]
         Path(profile['reference_text']).write_text('不同的文本。')
         with self.assertRaisesRegex(ValueError, 'transcript changed'):
-            voice_reference({'voice': 'calm-woman'}, self.root)
+            voice_reference({'voice': 'realistic-man'}, self.root)
 
     def test_stale_local_catalog_cannot_restore_retired_voices_or_names(self):
         directory = self.root/'options'
@@ -62,8 +62,8 @@ class VoiceReferenceTests(unittest.TestCase):
             {'id':'bilibili-outro','name':'旧女声名','requires_original_reference':False}]}))
         catalog = load_voice_catalog(self.root)
         self.assertEqual([voice['name'] for voice in catalog['voices']],
-                         ['逼真男声','逼真女声','甜美学姐','Iapetus','知性女讲师','故事解说'])
-        self.assertEqual(catalog['default'], 'iapetus')
+                         ['逼真男声','逼真女声'])
+        self.assertEqual(catalog['default'], 'realistic-man')
         with self.assertRaisesRegex(ValueError, 'Unknown voice'):
             voice_reference({'voice':'friendly-man'}, self.root)
         with self.assertRaisesRegex(ValueError, 'six catalog voices'):
@@ -90,8 +90,9 @@ class VoiceReferenceTests(unittest.TestCase):
         reference, _ = voice_reference({}, self.root)
         self.assertEqual(reference, Path(personal['voices'][0]['reference_audio']))
         self.assertTrue(next(item for item in load_voices(self.root) if item['id']=='bilibili-outro')['preferred'])
-        reference, _ = voice_reference({'voice':'iapetus'}, self.root)
-        self.assertEqual(reference.name, 'iapetus.wav')
+        job_catalog = import_reference(self.root, 'realistic-man', '逼真男声', self.audio, self.text, 'source_recording')
+        reference, _ = voice_reference({'voice':'realistic-man'}, self.root)
+        self.assertEqual(reference, Path(json.loads(job_catalog.read_text())['voices'][0]['reference_audio']))
         self.assertEqual(resolved_options({}, self.root)['cfg_value'], 1.5)
         self.assertEqual(resolved_options({'cfg_value':1.7}, self.root)['cfg_value'], 1.7)
 

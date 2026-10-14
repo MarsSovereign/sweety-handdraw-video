@@ -6,11 +6,3 @@ dist/
 .env
 .env.*
 node_modules/
-
-# Public media lives in versioned Release assets.
-docs/media/*
-skills/sweety-handdraw-video/assets/**/*.png
-skills/sweety-handdraw-video/assets/**/*.jpg
-skills/sweety-handdraw-video/assets/**/*.jpeg
-skills/sweety-handdraw-video/assets/**/*.gif
-skills/sweety-handdraw-video/assets/**/*.wav
