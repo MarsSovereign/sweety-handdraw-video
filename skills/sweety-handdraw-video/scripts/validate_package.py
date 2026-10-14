@@ -3,9 +3,14 @@
 import hashlib
 import json
 from pathlib import Path
-from hosted_assets import asset_available, records as hosted_records
+from hosted_assets import asset_available, checked as preset_intact, records as hosted_records
 
 PACKAGE = Path(__file__).resolve().parents[1]
+PACKAGE_BUDGET_BYTES, FILE_BUDGET_BYTES = 50 * 1024**2, 10 * 1024**2
+
+
+def packaged_files(root=PACKAGE):
+    return [p for p in sorted(root.rglob('*')) if p.is_file() and '__pycache__' not in p.parts and p.name != '.DS_Store' and p.suffix != '.pyc']
 
 
 def validate_package():
@@ -44,12 +49,18 @@ def validate_package():
     hosted = hosted_records()
     for preview in previews:
         record = hosted['assets/style-previews/'+preview['thumbnail']]
-        if record['sha256'] != preview['thumbnail_sha256'] or record['url'] != preview['url']:
+        if record['sha256'] != preview['thumbnail_sha256']:
             raise ValueError('Catalog preview changed: '+preview['id'])
-    binaries = [p for p in (PACKAGE/'assets').rglob('*') if p.suffix.lower() in {'.png','.jpg','.jpeg','.gif','.wav'}]
-    if binaries:
-        raise ValueError('Public presets belong in hosted storage, not the install package')
-    return {'catalog_previews_checked': len(previews), 'status': 'passed', 'skill_entries': 1, 'bundled_dependencies': len(records), 'vendor_files_checked': checked}
+    for key, record in hosted.items():
+        if not (PACKAGE/key).is_file() or not preset_intact((PACKAGE/key).read_bytes(), record):
+            raise ValueError('Packaged preset missing or changed: '+key)
+    files = packaged_files()
+    total = sum(path.stat().st_size for path in files)
+    oversized = [str(path.relative_to(PACKAGE)) for path in files if path.stat().st_size > FILE_BUDGET_BYTES]
+    if oversized or total > PACKAGE_BUDGET_BYTES:
+        raise ValueError(f'Package budget exceeded (total {total/1024**2:.1f} MB <= 50 MB, single file <= 10 MB): {oversized}')
+    return {'catalog_previews_checked': len(previews), 'status': 'passed', 'skill_entries': 1, 'bundled_dependencies': len(records),
+            'vendor_files_checked': checked, 'packaged_presets_checked': len(hosted), 'package_megabytes': round(total/1024**2, 2)}
 
 
 if __name__ == '__main__':

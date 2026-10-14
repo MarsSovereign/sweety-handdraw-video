@@ -1,6 +1,6 @@
 """Compile content-designed pages against measured narration, not fixed scene lengths."""
 from pathlib import Path
-import glob
+import copy
 import hashlib
 import json
 import math
@@ -18,6 +18,7 @@ from caption_assets import build_caption, resolve_cues
 from watermark_assets import prepare_watermark
 from narration_master import load_master
 from audio_contract import resolve_audio_layers, validate_ending
+from fonts import check_coverage, select as select_font
 from storyboard_lint import anchor_beat, check_build, group_beats
 from timeline_contract import validate_page_motion
 
@@ -39,56 +40,69 @@ def resolve_input(job_directory, value):
 
 
 def find_font(manifest):
-    configured = manifest.get('font', {})
-    if configured.get('path'):
-        path = Path(configured['path']).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f'Configured font is missing: {path}')
-        return str(path.resolve()), int(configured.get('index', 0))
-    candidates = [(path, 2) for path in glob.glob('/System/Library/AssetsV2/com_apple_MobileAsset_Font8/*/AssetData/Hannotate.ttc')]
-    candidates += [('/System/Library/Fonts/Hiragino Sans GB.ttc', 0),
-                   ('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', 0)]
-    for path, index in candidates:
-        if Path(path).is_file():
-            return path, index
-    raise FileNotFoundError('No Chinese font found; set font.path and font.index in job.json')
+    """Handwriting font: job.json font.path/index, else the first covering font of the platform chain (see fonts.py)."""
+    return select_font('handwriting', '', manifest.get('font'))
+
+
+def fix_commands(report):
+    """One actionable line per missing item; image generation is a host capability scripts cannot detect."""
+    mac = sys.platform == 'darwin'
+    fixes = []
+    if not all(report['tools'].values()):
+        fixes.append('FFmpeg: ' + ('brew install ffmpeg' if mac else 'sudo apt install ffmpeg  (dnf install ffmpeg-free / pacman -S ffmpeg)') + '; or bash scripts/setup.sh')
+    if 'font_error' in report:
+        fixes.append('Fonts: ' + ('install Hannotate SC in Font Book (or set font.path in job.json)' if mac else
+                     'sudo apt install fonts-noto-cjk fontconfig  (dnf install google-noto-sans-cjk-fonts / pacman -S noto-fonts-cjk)')
+                     + '; run python3 scripts/fonts.py JOB to see every font tried')
+    if report['missing_inputs']:
+        fixes.append('Inputs: create or fix these job paths: ' + ', '.join(str(value) for value in report['missing_inputs']))
+    if 'art_direction_error' in report:
+        fixes.append('Art direction: record and bind the brief/prompt/review for every image (references/style-and-drawing.md)')
+    if not report['narration_files_available']:
+        fixes.append('Narration: start the local VoiceStudio service (http://127.0.0.1:3900) then python3 scripts/voice_studio.py JOB; '
+                     'or set voxcpm.model_path and run python3 scripts/voxcpm_voice.py JOB with the MLX Python; '
+                     'or, only with the user\'s own key, volcengine_tts.py / gemini_tts.py; '
+                     'or supply narration.source + alignment (references/continuous-narration.md)')
+    fixes.append('Images: Codex has built-in image generation; Claude Code needs an image-generation tool/MCP or user-provided images. '
+                 'Scripts cannot detect this; without it, stop instead of producing a text-only film.')
+    return fixes
 
 
 def inspect_environment(job_directory):
     root, manifest = load_manifest(job_directory)
-    report = {'tools': {name: shutil.which(name) for name in ('ffmpeg', 'ffprobe')}, 'missing_inputs': []}
+    report = {'python': sys.version.split()[0], 'tools': {name: shutil.which(name) for name in ('ffmpeg', 'ffprobe')}, 'missing_inputs': []}
     try:
-        report['font'] = find_font(manifest)
+        report['fonts'] = check_coverage(copy.deepcopy(manifest))
+        report['font'] = (report['fonts']['handwriting']['path'], report['fonts']['handwriting']['index'])
     except (ValueError, FileNotFoundError) as error:
         report['font_error'] = str(error)
     inputs = [manifest.get('cover', {}).get('source')]
+    audio = [manifest['narration'].get(key) for key in ('source', 'alignment')] if manifest.get('narration') else []
     for page in manifest['pages']:
         for beat in page['beats']:
             if not manifest.get('narration'):
-                inputs.append(beat.get('audio'))
+                audio.append(beat.get('audio'))
             inputs.extend(action.get('source') for action in beat.get('actions',[]) if action['type'] == 'illustration')
-    if manifest.get('narration'):
-        inputs.extend(manifest['narration'].get(key) for key in ('source', 'alignment'))
     for page in manifest['pages']:
         for group in page.get('visual_groups', []):
             inputs.extend(action.get('source') for action in group['actions'] if action['type']=='illustration')
     if manifest.get('hand', {}).get('source'):
         inputs.append(manifest['hand']['source'])
-    for value in inputs:
+    for value in inputs + audio:
         if not value or not resolve_input(root, value).is_file():
             report['missing_inputs'].append(value)
+    visuals_missing = any(not value or not resolve_input(root, value).is_file() for value in inputs)
     try:
         report['art_direction']=verify_art_direction(root,manifest)
     except (ValueError,FileNotFoundError,KeyError) as error:
         report['art_direction_error']=str(error)
     if not manifest.get('runtime_fixture'):
-        try:
-            import requests
-            response=requests.get(manifest.get('voice_studio',{}).get('url','http://127.0.0.1:3900')+'/engines/tts',timeout=5)
-            response.raise_for_status()
-            report['voice_studio']={'available':True,'active':response.json().get('active')}
-        except Exception as error:
-            report['voice_studio']={'available':False,'message':'VoiceStudio 未安装、未启动或不可达；无法生成旁白，请先安装并启动。'}
+        from voice_backends import voice_backends_report
+        backends = voice_backends_report(manifest.get('voice_studio', {}).get('url', 'http://127.0.0.1:3900'))
+        model = manifest.get('voxcpm', {}).get('model_path')
+        if model and (Path(model).expanduser()/'config.json').is_file():
+            backends['local_voxcpm2'].update(model=str(Path(model).expanduser()), available=bool(backends['local_voxcpm2']['python']))
+        report['voice_backends'] = backends
     report['narration_files_available'] = all(beat.get('audio') and resolve_input(root,beat['audio']).is_file()
         for page in manifest['pages'] for beat in page['beats'])
     if manifest.get('narration'):
@@ -101,8 +115,15 @@ def inspect_environment(job_directory):
     elif not manifest.get('runtime_fixture'):
         report['narration_error'] = 'Production requires a complete narration master and alignment'
         report['narration_files_available'] = False
-    report['ready'] = all(report['tools'].values()) and not report['missing_inputs'] and 'font_error' not in report and 'art_direction_error' not in report and report['narration_files_available']
-
+    renderable = all(report['tools'].values()) and not visuals_missing and 'font_error' not in report and 'art_direction_error' not in report
+    report['ready'] = renderable and not report['missing_inputs'] and report['narration_files_available']
+    report['capabilities'] = {
+        'render': renderable,
+        'generate_narration': bool(report.get('voice_backends') and (report['voice_backends']['local_voxcpm2']['available'] or report['voice_backends']['voice_studio']['reachable']
+                                                                     or any(report['voice_backends']['cloud_optional'].values()))),
+        'narration_ready': report['narration_files_available'],
+        'generate_images': 'host-dependent: not detectable by scripts'}
+    report['fixes'] = fix_commands(report)
     return report
 
 
@@ -153,6 +174,7 @@ class FilmBuilder:
         self.fps = int(canvas.get('fps', 30))
         if self.width < 320 or self.height < 240 or self.width % 2 or self.height % 2 or not 1 <= self.fps <= 60:
             raise ValueError('Canvas requires even width/height >=320x240 and fps within 1..60')
+        self.fonts = check_coverage(self.manifest)  # every rendered character must have a glyph; pins role fonts
         self.font_path, self.font_index = find_font(self.manifest)
         stroke_assets.configure_assets(self.work / 'assets', self.font_path, self.font_index, self.fps)
         self.assets = {}

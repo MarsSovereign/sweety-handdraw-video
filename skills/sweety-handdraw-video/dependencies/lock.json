@@ -14,7 +14,7 @@
     "commit": "772a1477cd436dd8d9fdff60e626a0338ff2f682",
     "path": "dependencies/omniailab-ai-director",
     "license": "MIT (preserved upstream notices)",
-    "files": 749,
+    "files": 216,
     "entry": "GUIDE.md",
     "entry_sha256": "73cf80a56ed5085e664034190f812f356ea554b6c6a0c452a6b4b3d8c01eed4b",
     "url": "https://github.com/tomatoparkdao/omniailab-ai-director"

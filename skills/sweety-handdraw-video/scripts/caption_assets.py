@@ -6,17 +6,12 @@ from PIL import Image, ImageDraw, ImageFont, ImageColor
 
 
 def caption_font(options):
-    configured = options.get('font', {})
-    if configured.get('path'):
-        path = Path(configured['path']).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f'Caption font is missing: {path}')
-        return str(path.resolve()), int(configured.get('index', 0))
-    for path in ('/System/Library/Fonts/Hiragino Sans GB.ttc',
-                 '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'):
-        if Path(path).is_file():
-            return path, 0
-    raise FileNotFoundError('Set captions.font to a legible regular Chinese font')
+    """Regular caption/watermark font: options.font.path, else the platform chain (coverage is checked by fonts.check_coverage)."""
+    from fonts import select
+    try:
+        return select('caption', '', options.get('font'))
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f'{error}; set captions.font to a legible regular Chinese font') from error
 
 
 def resolve_cues(beat):

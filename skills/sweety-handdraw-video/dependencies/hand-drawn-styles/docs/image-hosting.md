@@ -1,6 +1,6 @@
 # 图片托管与维护规则
 
-项目图片统一托管在 [Netlify 项目 gentle-starburst-99bd99](https://app.netlify.com/projects/gentle-starburst-99bd99/overview)。公开基础地址为 `https://gentle-starburst-99bd99.netlify.app/hand-drawn`。展示图、研发图和运行参考图均使用此地址；Git 与默认安装包只保留链接、清单和审计记录。
+项目图片原托管在 Netlify 项目 gentle-starburst-99bd99；该站点 2026-10 因额度耗尽返回 503，sweety-handdraw-video 内置副本改用 jsDelivr 固定上游提交 `cdfd004c89164096c861ad06ebab2aa1527d1710`（三张隐私清理图以 GitHub Release 镜像为准）。公开基础地址为 `https://cdn.jsdelivr.net/gh/threerocks/hand-drawn-styles@cdfd004c89164096c861ad06ebab2aa1527d1710`。展示图、研发图和运行参考图均使用此地址；Git 与默认安装包只保留链接、清单和审计记录。
 
 ## 图片清单与缓存
 

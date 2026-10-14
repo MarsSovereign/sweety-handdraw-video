@@ -97,7 +97,7 @@ class RenderPromptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         reference = json.loads(result.stdout)["references"][0]
         self.assertIn("url", reference)
-        self.assertTrue(reference["url"].startswith("https://gentle-starburst-99bd99.netlify.app/hand-drawn/"))
+        self.assertTrue(reference["url"].startswith("https://cdn.jsdelivr.net/gh/threerocks/hand-drawn-styles@cdfd004c89164096c861ad06ebab2aa1527d1710/"))
         self.assertEqual(hashlib.sha256(Path(reference["path"]).read_bytes()).hexdigest(), reference["sha256"])
 
     def test_paper_folk_plain_prompt_does_not_require_image_download(self) -> None:

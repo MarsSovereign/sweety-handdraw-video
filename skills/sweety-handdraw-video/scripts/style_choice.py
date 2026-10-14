@@ -1,14 +1,17 @@
 """Snapshot the exact hand-drawn catalog, show an image picker, validate its decision."""
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import secrets
+import shutil
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit
 from PIL import Image
+from hosted_assets import fetch, resolve_asset
 
 PACKAGE = Path(__file__).resolve().parents[1]
 MODE_LABELS = {
@@ -43,19 +46,25 @@ def prepare_catalog(job, source):
         candidates = list((source / 'examples').glob(identity.zfill(2) + '-*.png')) if '.' not in identity else []
         candidates += list((source / ('assets/style-' + identity)).glob('anchor-*.png'))
         preview_path = directory / 'previews' / (identity + '.jpg')
+        # Every preview is served from the job directory; the browser never fetches a remote host.
         if candidates:
             image = Image.open(candidates[0]).convert('RGB')
             image.thumbnail((720, 720))
             image.save(preview_path, quality=87)
-            preview = 'previews/' + preview_path.name
         elif identity in hosted_previews and source == (PACKAGE/'dependencies/hand-drawn-styles').resolve():
-            preview = hosted_previews[identity]['url']
+            shutil.copyfile(resolve_asset(fallback / hosted_previews[identity]['thumbnail']), preview_path)
         else:
             keys = [key for key in remote_images if key.startswith('examples/' + identity.zfill(2) + '-')]
             keys += [key for key in remote_images if key.startswith('assets/style-' + identity + '/anchor-')]
             if not keys:
                 raise ValueError('No real preview for style ' + identity)
-            preview = remote_images[keys[0]]['url']
+            record = remote_images[keys[0]]
+            urls = [record['url']] + ([record['fallback_url']] if record.get('fallback_url') else [])
+            content = fetch(keys[0], {**record, 'urls': urls}, source / keys[0])
+            image = Image.open(io.BytesIO(content)).convert('RGB')
+            image.thumbnail((720, 720))
+            image.save(preview_path, quality=87)
+        preview = 'previews/' + preview_path.name
         catalog.append({'id': identity, 'name': name, 'preview': preview,
                         'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path)})
     if not catalog:
