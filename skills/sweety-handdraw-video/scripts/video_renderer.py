@@ -1,6 +1,7 @@
 """Render measured story timelines with path-based text, artwork and marker motion."""
 from pathlib import Path
 import bisect
+import hashlib
 import json
 import math
 import subprocess
@@ -436,12 +437,18 @@ def mix_audio(root,timeline):
         raise ValueError('Audio mixing changed narration duration; refusing to encode a truncated track')
 
 
+def aigc_arguments(produce_id):
+    """Implicit AI-generated-content label (GB 45438 style keys); platforms may strip it, so delivery notes still ask for an explicit declaration."""
+    label={'Label':'1','ContentProducer':'sweety-handdraw-video','ProduceID':produce_id,'ReservedCode1':'','ContentPropagator':'','PropagateID':'','ReservedCode2':''}
+    return ['-metadata','AIGC='+json.dumps(label),'-movflags','+faststart+use_metadata_tags']
+
+
 def encode(renderer,path,start=0.,duration=None):
     duration=renderer.timeline['duration']-start if duration is None else duration
     if start < 0 or duration <= 0 or start+duration > renderer.timeline['duration']+.001:
         raise ValueError('Preview interval must stay within the narration timeline')
     temporary_path=path.with_name(path.stem+'.rendering'+path.suffix)
-    command=['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24','-s',f'{renderer.width}x{renderer.height}','-r',str(renderer.fps),'-i','-','-ss',str(start),'-i',str(renderer.work/'mix.wav'),'-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-t',str(duration),'-movflags','+faststart','-map_metadata','-1',str(temporary_path)]
+    command=['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24','-s',f'{renderer.width}x{renderer.height}','-r',str(renderer.fps),'-i','-','-ss',str(start),'-i',str(renderer.work/'mix.wav'),'-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-t',str(duration),'-map_metadata','-1',*aigc_arguments(hashlib.sha256((renderer.root/'job.json').read_bytes()).hexdigest()[:16]),str(temporary_path)]
     process=subprocess.Popen(command,stdin=subprocess.PIPE)
     for index in range(math.ceil(duration*renderer.fps)):
         process.stdin.write(renderer.frame(start+index/renderer.fps).tobytes())
