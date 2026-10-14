@@ -100,6 +100,22 @@ python3 /path/to/skill/scripts/handdraw_video.py verify /path/to/job
 
 输出 `film.mp4/cover.png/captions.srt/script.txt/verification.json/verification.txt`。另存中文名时保留原件与哈希。脚本、图片、音频、设计或布局变化均需重渲染和复核。`runtime_fixture:true` 仅供包内离线测试，永远不能生成成片交付回执。
 
+## 分镜
+
+生产任务在 `job.json` 设 `"storyboard": "storyboard.json"`（格式见[创作与分镜](story-design.md)），每个属于计划视觉的动作加 `"visual": "v01"`；插画必须带，没带的文字/马克笔视为标签。
+
+- `visual_groups` 的 `start_beat/end_beat` 可写页内索引或 beat id。组内动作可加 `"from_beat": "b2"`：前面的动作画到该句开始前，这个动作随该句起笔；组跨句连续绘制，下一句开始时可以继续画。
+- 同页两个绘制块（beat 动作或组）时间重叠时，构建直接报错，提示合并为一个组并用 `from_beat` 对齐；不再等到渲染才发现。
+- 构建把 `visual` 与插画 `image:[source,crop]` 写入事件，运行分镜检查：错误中止，统计与警告写入 `timeline.storyboard`。
+- 有 storyboard 时，drawing-plan 的 subject 须有 `identity_cues`，drawing-review 须有 `recognizability`；出现已声明角色的插画在 drawing-plan 写 `references`。
+
+```bash
+python3 /path/to/skill/scripts/storyboard_lint.py /path/to/job --budget   # 生图前：预算与复杂度档位
+python3 /path/to/skill/scripts/storyboard_lint.py /path/to/job            # 写完 job.json：计划是否全部落地
+python3 /path/to/skill/scripts/plan_status.py /path/to/job                # 按镜头列出剩余工作
+python3 /path/to/skill/scripts/drawing_contract.py /path/to/job --thumbnails  # 缩略图识别测试
+```
+
 ## 画风与绘制计划门槛
 
 生产任务必须完成[画风选择与可绘制约定](style-and-drawing.md)。`job.json` 增加 `drawing_plan`、`drawing_review`；每个插画 action 增加 `drawing_plan_id`，需要独立轮廓时增加 `outline_mask`。旧任务不能直接绕过新门槛。
