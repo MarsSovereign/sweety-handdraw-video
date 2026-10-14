@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image, ImageColor, ImageFilter
 from watermark_assets import watermark_position
 from motion_profile import distance_fraction
+import illustration_layers
 
 
 ENTER_SECONDS, EXIT_SECONDS = .45, .5
@@ -74,6 +75,7 @@ class Renderer:
         self.artwork={name:Image.open(self.work/'assets'/f'{name}.png').convert('RGBA') for name in self.timeline['assets']}
         self.pixels={name:np.array(image) for name,image in self.artwork.items()}
         self.maps={name:np.load(self.work/'assets'/f'{name}.npz') for name in self.timeline['assets']}
+        self.layers={name:illustration_layers.load(self.work/'assets',name) for name in self.timeline['assets'] if (self.work/'assets'/f'{name}-line.png').exists()}
         self.cover=Image.open(self.output/'cover.png').convert('RGBA')
         hand=Image.open(self.timeline['hand']['source']).convert('RGBA')
         scale=self.timeline['hand']['scale']
@@ -85,7 +87,9 @@ class Renderer:
         name=event['asset']
         if event.get('caption') or time>=event['end']:
             return self.artwork[name]
-        progress=np.clip((time-event['start'])/(event['end']-event['start']),0,1)
+        progress=float(np.clip((time-event['start'])/(event['end']-event['start']),0,1))
+        if name in self.layers:
+            return Image.fromarray(illustration_layers.compose(self.layers[name],progress))
         maps=self.maps[name]
         pixels=self.pixels[name].copy()
         if 'ink' in maps:

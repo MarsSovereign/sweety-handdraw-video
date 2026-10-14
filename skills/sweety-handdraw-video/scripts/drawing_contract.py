@@ -138,7 +138,7 @@ def verify_drawing_plans(job, manifest, style):
             raise ValueError('Illustration has no pre-generation drawing plan')
         plan, review = plans[identity], inspected.get(identity, {})
         expected = [part['id'] for part in plan['parts']]
-        actual = [part['id'] for part in action.get('parts', [])]
+        actual = [part['id'] for part in action.get('part_regions') or action.get('parts', [])]
         if expected != actual:
             raise ValueError('Actual part masks must match the planned outline/fill order')
         source = Path(action['source'])

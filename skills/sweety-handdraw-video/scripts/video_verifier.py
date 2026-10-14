@@ -33,7 +33,7 @@ def build_fingerprint(root):
         from drawing_contract import illustration_actions
         plan_path = root/manifest['drawing_plan']
         paths.extend([root/'style/catalog.json',root/'style/selection.json',root/'style/resolved.json',plan_path,plan_path.with_suffix('.preflight.json'),root/manifest['drawing_review']])
-        paths.extend((root/action['outline_mask']).resolve() for action in illustration_actions(manifest) if action.get('outline_mask'))
+        paths.extend((root/action[key]).resolve() for action in illustration_actions(manifest) for key in ('outline_mask', 'region_map') if action.get(key))
     if timeline.get('narration_master'):
         from narration_master import verify_compiled_master
         verify_compiled_master(root, timeline)
@@ -45,6 +45,7 @@ def build_fingerprint(root):
     paths.extend(Path(clip['source']) for clip in timeline['audio_report'])
     for name in sorted(timeline['assets']):
         paths.extend(root / 'work' / 'assets' / f'{name}.{extension}' for extension in ('png', 'npz'))
+        paths.extend(sorted((root / 'work' / 'assets').glob(f'{name}-*.png')))
         if timeline['assets'][name].get('font'):
             paths.append(Path(timeline['assets'][name]['font']['path']))
         if timeline['assets'][name].get('source'):
@@ -99,30 +100,31 @@ def verify_assets(root, timeline):
         from drawing_contract import validate_strokes
         validate_strokes(metadata)
         if metadata['type'] == 'illustration':
-            require('owners' in maps and bool(metadata.get('parts')), f'{name}: missing semantic ownership')
+            require('owners' in maps and 'ink_owner' in maps and bool(metadata.get('parts')), f'{name}: missing semantic ownership; rebuild the asset')
             require((maps['owners'][alpha>0]>=0).all(), f'{name}: unowned illustration pixels')
             parts=metadata['parts']
             require(max(part['outline_end'] for part in parts)<=min(part['fill_start'] for part in parts)+1e-6,
                     f'{name}: filling starts before all outlines are complete')
-            for phase,channel in [('outline','ink'),('fill','color')]:
+            # A stroke belongs wholly to one part (ink_owner); paint follows the pixel's part.
+            for phase,channel,owners in [('outline','ink',maps['ink_owner']),('fill','color',maps['owners'])]:
                 previous_end=0.
                 for index,part in enumerate(parts):
                     require(part[phase+'_start']>=previous_end-1e-6,f'{name}: semantic part order is broken')
                     previous_end=part[phase+'_end']
-                    selected=(alpha>0)&(maps['owners']==index)&np.isfinite(maps[channel])
-                    if selected.any():
-                        times=maps[channel][selected]
+                    times=maps[channel][(owners==index)&np.isfinite(maps[channel])]
+                    if times.size:
                         require(times.min()>=part[phase+'_start']-1e-6 and times.max()<=part[phase+'_end']+1e-6,
                                 f'{name}: pixels leak into another semantic part interval')
             entry['semantic_parts_in_order']=[part['id'] for part in parts]
-            ink_mask = (alpha > 0) & (maps['ink_weight'] > .01)
-            if ink_mask.any():
-                distances, _ = match_reveal_to_tip(metadata, maps['ink'], ink_mask, {'ink'})
+            drawn = np.isfinite(maps['ink']) & (maps['ink_ramp'] == 0)
+            if drawn.any():
+                distances, _ = match_reveal_to_tip(metadata, maps['ink'], drawn, {'ink'})
                 require(np.isfinite(distances).all() and distances.max() < 9, f'{name}: ink is too far from the nib')
                 entry['ink_tip_max_distance_px'] = float(distances.max())
-            color_mask = (alpha > 0) & (maps['ink_weight'] < .99)
-            if color_mask.any():
-                distances, radii = match_reveal_to_tip(metadata, maps['color'], color_mask, {'color'})
+            entry['faded_ink_pixels'] = int((np.isfinite(maps['ink']) & (maps['ink_ramp'] > 0)).sum())
+            painted = np.isfinite(maps['color'])
+            if painted.any():
+                distances, radii = match_reveal_to_tip(metadata, maps['color'], painted, {'color'})
                 require(np.isfinite(distances).all() and (radii > 0).all(), f'{name}: unpainted color pixels')
                 require((distances <= radii + .04).all(), f'{name}: color outside the active brush')
                 entry['paint_max_overshoot_px'] = float((distances - radii).max())
