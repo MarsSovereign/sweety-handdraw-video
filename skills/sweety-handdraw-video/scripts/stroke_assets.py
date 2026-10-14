@@ -376,7 +376,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     total = float(seconds) if seconds else float(np.clip(lines['required'] + fill['required'] + ramp, 1, 30))
     sketches, segments, cursor = (line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []), [], 0.
     if sketches:
-        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed, FPS) * 1.6))) for stroke in sketches]
+        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed) * 1.6))) for stroke in sketches]
         factor = min(1., min(1.5, .12 * total) / (sum(each) + .1 * len(each)))
         for index, (stroke, length) in enumerate(zip(sketches, each)):
             length = max(2. / FPS, length * factor)

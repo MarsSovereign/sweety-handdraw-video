@@ -4,12 +4,14 @@ import math
 import re
 import numpy as np
 from scipy import ndimage
-from motion_profile import time_fraction
+from motion_profile import PEAK, time_fraction
+from line_topology import turning
 from stroke_paths import calculate_lengths
 
 LINE_SPEED = 420.     # px/s along curvature-weighted length: a person inking a confident contour at 1080p
 SPEED_FACTOR = 4.     # calibrated cap: speed-drawing videos run 4-8x life and still read as human when the order is coherent
-FRAME_PX = 80.        # most a pen or marker may move in one frame and still read as continuous motion
+FRAME_PX = 80.        # most an inking nib may move in one frame and still read as continuous motion
+TRAVEL_PX = 120.      # peak per-frame move of a lifted pen: a quick flick between strokes, never a teleport
 DETAIL_BOOST = 1.6    # low-priority details may run this much faster than the main strokes under pressure
 FADE_SECONDS = .3
 REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than draw a line upward or leftward
@@ -22,25 +24,29 @@ def hashed(value):
 
 
 def weighted_lengths(points):
-    """Arc length inflated on tight turns so the nib slows down on curves and corners."""
-    steps = np.diff(points, axis=0)
+    """Arc length inflated on tight turns so the nib slows down on curves and corners (turn measured over
+    +-6 px so skeleton pixel jitter does not count as curvature)."""
+    steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
     if not len(steps):
         return np.zeros(1)
-    angles = np.arctan2(steps[:, 1], steps[:, 0])
-    turn = np.abs((np.diff(angles, prepend=angles[0]) + np.pi) % (2 * np.pi) - np.pi)
-    turn = ndimage.uniform_filter1d(turn, 5, mode='nearest')
-    return np.r_[0., np.cumsum(np.linalg.norm(steps, axis=1) * (1 + 1.5 * np.clip(turn / (np.pi / 8), 0, 1)))]
+    turn = np.radians(turning(points, 6))[1:] / 6
+    return np.r_[0., np.cumsum(steps * (1 + 1.5 * np.clip(turn / (np.pi / 8), 0, 1)))]
 
 
-def line_cap(speed, fps):
-    """Mean nib speed cap: 4x human pace, with the min-jerk peak (1.875x mean) inside FRAME_PX per frame."""
-    return min(LINE_SPEED * SPEED_FACTOR, FRAME_PX * fps / 1.875) * speed
+def line_cap(speed):
+    """Mean nib speed cap: SPEED_FACTOR x human pace (each stroke is further held inside FRAME_PX per frame)."""
+    return LINE_SPEED * SPEED_FACTOR * speed
 
 
-def lift_seconds(distance, fps=30, scale=1.):
-    """Pen-up time: 80-150 ms, never so short that the renderer's lifted move (75% of it in min-jerk motion,
-    peak 1.875x mean) exceeds 80 px per frame."""
-    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (.75 * FRAME_PX * fps))
+def lift_seconds(distance, fps=30, scale=1., lapse=1.):
+    """Pen-up time: 80-150 ms at human pace, time-lapsed with the ink down to 2 frames, never so short that the
+    renderer's lifted move (75% of it in min-jerk motion, peak 1.875x mean) exceeds TRAVEL_PX per frame."""
+    return max(2. / fps, (.08 + .07 * min(1., distance / 300.)) * scale / lapse, 1.875 * distance / (.75 * TRAVEL_PX * fps))
+
+
+def stroke_profile(stroke, lapse):
+    """Min-jerk at human pace; when time-lapsed, long strokes cruise between eased ends (lower peak speed)."""
+    return 'plateau' if lapse > 1.5 and stroke['length'] >= 60 else 'minjerk'
 
 
 def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
@@ -79,7 +85,7 @@ def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
     return strokes
 
 
-def orient(stroke, tip):
+def orient(stroke, tip, reverse=REVERSE_COST):
     """Right-hander prior as a point index order: loops start at the top going counter-clockwise,
     lines steeper than ~30 degrees run down, flatter ones run right; tiny marks start nearer the pen."""
     points = stroke['points']
@@ -90,14 +96,14 @@ def orient(stroke, tip):
         ring = np.r_[np.arange(top, count), np.arange(0, top + 1)]
         loop = points[ring]
         area = np.sum(loop[:-1, 0] * loop[1:, 1] - loop[1:, 0] * loop[:-1, 1])
-        return (ring[::-1] if area > 0 else ring), 0.
+        return (ring[::-1] if area > 0 else ring), None
     delta = points[-1] - points[0]
     if np.linalg.norm(delta) < 8:
         near = np.linalg.norm(points[0] - tip) <= np.linalg.norm(points[-1] - tip)
-        return (forward if near else backward), 0.
+        return (forward if near else backward), None
     if abs(delta[1]) >= .6 * abs(delta[0]):
-        return (forward if delta[1] >= 0 else backward), REVERSE_COST
-    return (forward if delta[0] >= 0 else backward), REVERSE_COST
+        return (forward if delta[1] >= 0 else backward), reverse
+    return (forward if delta[0] >= 0 else backward), reverse
 
 
 def apply_order(stroke, index):
@@ -107,9 +113,9 @@ def apply_order(stroke, index):
         stroke['weights'] = weighted_lengths(stroke['points'])
 
 
-def order(strokes, part_count, tip):
+def order(strokes, part_count, tip, reverse=REVERSE_COST):
     """Within each part: silhouette, key features, structure, details; greedy nearest start from the pen.
-    Going against the direction prior costs REVERSE_COST px of extra travel."""
+    Going against the direction prior costs `reverse` px of extra travel (a hurried hand cares less)."""
     ordered = []
     tip = np.asarray(tip, float)
     for part in range(part_count):
@@ -118,10 +124,10 @@ def order(strokes, part_count, tip):
             while pool:
                 choice = None
                 for stroke in pool:
-                    index, penalty = orient(stroke, tip)
+                    index, penalty = orient(stroke, tip, reverse)
                     points = stroke['points']
                     cost = np.linalg.norm(points[index[0]] - tip)
-                    if penalty and np.linalg.norm(points[index[-1]] - tip) + penalty < cost:
+                    if penalty is not None and np.linalg.norm(points[index[-1]] - tip) + penalty < cost:
                         index, cost = index[::-1], np.linalg.norm(points[index[-1]] - tip) + penalty
                     if choice is None or cost < choice[0]:
                         choice = (cost, stroke, index)
@@ -133,15 +139,19 @@ def order(strokes, part_count, tip):
     return ordered, tip
 
 
-def duration(stroke, speed, fps):
-    return max(2. / fps, stroke['weights'][-1] / speed)
+def duration(stroke, speed, fps, lapse=1.):
+    """(seconds, profile): at least 2 frames, and the profile's peak speed stays inside FRAME_PX per frame."""
+    profile = stroke_profile(stroke, lapse)
+    return max(2. / fps, stroke['weights'][-1] / min(speed, FRAME_PX * fps / PEAK[profile])), profile
 
 
-def line_seconds(ordered, speed, fps, detail_speed=None):
+def line_seconds(ordered, speed, fps, detail_speed=None, lapse=1.):
     total, previous = 0., None
     for stroke in ordered:
         rate = detail_speed if detail_speed and stroke['tier'] == DETAIL else speed
-        total += duration(stroke, rate, fps) + (lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1) if previous is not None else 0.)
+        total += duration(stroke, rate, fps, lapse)[0]
+        if previous is not None:
+            total += lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1, lapse)
         previous = stroke['points'][-1]
     return total
 
@@ -151,31 +161,35 @@ def requirements(strokes, part_count, tip, speed, fps):
     every = [dict(stroke, fade=False, tier=min(stroke['tier'], DETAIL)) for stroke in strokes]
     drawable = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] != TEXTURE]
     essential = [dict(stroke, fade=False) for stroke in strokes if stroke['tier'] in (SILHOUETTE, KEY)]
-    cap = line_cap(speed, fps)
+    cap, hurried = line_cap(speed), REVERSE_COST / SPEED_FACTOR
     # A part whose strokes are all faded still takes FADE_SECONDS to materialise.
     fades = lambda kept: FADE_SECONDS * len({stroke['part'] for stroke in strokes} - {stroke['part'] for stroke in kept})
+    at_cap = lambda kept, detail: line_seconds(order(kept, part_count, tip, hurried)[0], cap, fps, detail, SPEED_FACTOR) + fades(kept)
     return {'required': line_seconds(order(every, part_count, tip)[0], LINE_SPEED * speed, fps),
-            'all_at_cap': line_seconds(order(drawable, part_count, tip)[0], cap, fps, cap * DETAIL_BOOST) + fades(drawable),
-            'minimum': line_seconds(order(essential, part_count, tip)[0], cap, fps) + fades(essential)}
+            'all_at_cap': at_cap(drawable, cap * DETAIL_BOOST), 'minimum': at_cap(essential, None)}
 
 
 def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
     """Fit the strokes into budget seconds. Returns ordered drawn strokes with times (fractions of total),
     segments, per-part [start, end] fractions and counts."""
-    base, cap = LINE_SPEED * speed, line_cap(speed, fps)
+    base, cap = LINE_SPEED * speed, line_cap(speed)
     for stroke in strokes:
         stroke['fade'] = stroke['tier'] == TEXTURE
     ordered, _ = order(strokes, part_count, tip)
+    # A hurried hand takes the nearer end more often: soften the direction prior by the expected time-lapse.
+    reverse = REVERSE_COST / float(np.clip(line_seconds(ordered, base, fps) / max(budget, 1e-6), 1, SPEED_FACTOR))
+    ordered, _ = order(strokes, part_count, tip, reverse)
     parts_with_strokes = {stroke['part'] for stroke in strokes}
     # Seconds at this pace, including the soft materialisation of parts left with no drawn stroke.
-    seconds = lambda pace, detail=None: line_seconds(ordered, pace, fps, detail) + FADE_SECONDS * len(parts_with_strokes - {s['part'] for s in ordered})
+    seconds = lambda pace, detail=None: (line_seconds(ordered, pace, fps, detail, max(1., pace / base)) +
+                                         FADE_SECONDS * len(parts_with_strokes - {s['part'] for s in ordered}))
     demotable = sorted([stroke for stroke in ordered if stroke['tier'] in (STRUCTURE, DETAIL)], key=lambda s: (-s['tier'], s['length']))
     while demotable and seconds(cap, cap * DETAIL_BOOST) > budget:
         chunk = demotable[:max(1, len(demotable) // 12)]
         demotable = demotable[len(chunk):]
         for stroke in chunk:
             stroke['fade'] = True
-        ordered, _ = order(strokes, part_count, tip)
+        ordered, _ = order(strokes, part_count, tip, reverse)
     low, high = base, cap
     if seconds(base) <= budget:
         speed_used = max(base / 1.6, base * seconds(base) / max(budget, 1e-6))
@@ -192,20 +206,21 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
         speed_used = high
     pressure = min(1., max(0., (speed_used - base) / max(1e-6, cap - base)))
     detail_speed = speed_used * (1 + (DETAIL_BOOST - 1) * pressure)
+    lapse = max(1., speed_used / base)
     segments, cursor, previous, parts = [], start, None, []
     for part in range(part_count):
         part_start = cursor
         mine = [stroke for stroke in ordered if stroke['part'] == part]
         for stroke in mine:
             if previous is not None:
-                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, .9 + .2 * hashed(stroke['index']))
+                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, .9 + .2 * hashed(stroke['index']), lapse)
                 segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
                                  'points': [previous.tolist(), stroke['points'][0].tolist()]})
                 cursor += lift
-            seconds = duration(stroke, detail_speed if stroke['tier'] == DETAIL else speed_used, fps)
-            fraction = time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')
+            seconds, profile = duration(stroke, detail_speed if stroke['tier'] == DETAIL else speed_used, fps, lapse)
+            fraction = time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), profile)
             stroke['times'] = (cursor + seconds * fraction) / total
-            segments.append({'kind': 'ink', 'start': cursor / total, 'end': (cursor + seconds) / total, 'profile': 'minjerk',
+            segments.append({'kind': 'ink', 'start': cursor / total, 'end': (cursor + seconds) / total, 'profile': profile,
                              'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
             cursor += seconds
             previous = stroke['points'][-1]
