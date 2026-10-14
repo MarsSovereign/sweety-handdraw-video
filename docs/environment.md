@@ -1,6 +1,6 @@
 # 环境检查表
 
-适用本地 v1.3。支持 macOS 与 Linux，宿主为 Codex 与 Claude Code；Windows 暂不承诺。安装 Skill、准备本地运行环境、准备图像生成能力、部署声音模型是不同步骤。
+适用 v1.3。支持 macOS 与 Linux，宿主为 Codex 与 Claude Code；Windows 暂不承诺。安装 Skill、准备本地运行环境、准备图像生成能力、部署声音模型是不同步骤。
 
 ## 一条命令准备与检查
 
@@ -17,7 +17,8 @@ Skill 目录：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`；Codex 
 | 字段 | 含义 |
 |---|---|
 | `capabilities.render` | FFmpeg、字体覆盖、画面输入与美术记录均就绪，可以渲染画面（不看旁白） |
-| `capabilities.generate_narration` | 本地 VoxCPM2 模型已安装，或 VoiceStudio 可连通 |
+| `capabilities.generate_narration` | 本地 VoxCPM2 模型已安装、VoiceStudio 可连通，或用户配置了自己的云端 TTS 密钥 |
+| `voice_backends` | 逐项列出本地 VoxCPM2、VoiceStudio、降噪 / ASR 工具和云端密钥是否就绪（只报有无，不输出密钥） |
 | `capabilities.narration_ready` | 旁白音频与对齐文件已就绪；与 `render` 同时为真时 `ready` 才为真 |
 | `capabilities.generate_images` | 脚本无法探测宿主是否能生图，只给提示，由 Agent 自行确认 |
 | `fonts` | 手写、字幕、水印各自选中的字体，或缺字说明 |
@@ -31,7 +32,7 @@ Skill 目录：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`；Codex 
 确认本任务能调用图像生成；Claude Code 需要已接入的生图工具 / MCP，
 或由我提供插画。都没有时停下说明，不做只有文字的视频。
 确认一条真实可用的配音路径：本地 VoxCPM2、兼容 VoiceStudio，
-或我提供的完整旁白和时间戳。
+我自己配置密钥的火山豆包 / Gemini TTS，或我提供的完整旁白和时间戳。
 不自动下载大模型，不购买服务。
 环境通过后，使用我的内容先做一个代表场景，再完成视频。
 ```
@@ -49,12 +50,13 @@ Skill 目录：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`；Codex 
 | VoxCPM2 适配器 | 当前为 Apple Silicon / MLX 路径；已安装模型 | 不能直接当成 CUDA / Windows 的部署教程 |
 | VoiceStudio 适配器 | 兼容的本机 HTTP API 与已配置模型 | 同名桌面软件不必然兼容 |
 | 现成旁白 | 已检查的音频、全文与时间戳 | 没有时间戳时，仍须完成对齐 |
+| 云端 TTS（可选） | 用户自己的火山引擎或 Gemini 密钥，放在环境变量 | 不是默认，本地失败时不自动改用；本仓库只做了模拟 HTTP 测试，未真实调用 |
 | 可选声音清理 | 已安装的人声分离 / 降噪模型 | 不保证不损伤音色，需要前后试听 |
 
 ## 硬件与支持状态
 
 - 完整样片制作环境：作者的 M3 Max、36GB 内存、macOS、Codex、本地声音工具。
-- Linux：Ubuntu 24.04 容器内通过 `setup.sh`、全部回归、离线短片合成与安装包核验，字体自动选用 Noto Sans CJK SC；CI 在 ubuntu-latest 与 macos-latest 上走同一套 `setup.sh`。本地 MLX 配音不适用于 Linux，需用 VoiceStudio 或现成旁白。
+- Linux：Ubuntu 24.04 容器内通过 `setup.sh`、全部回归、离线短片合成与安装包核验，字体自动选用 Noto Sans CJK SC；CI 在 ubuntu-latest 与 macos-latest 上走同一套 `setup.sh`。本地 MLX 配音不适用于 Linux，需用 VoiceStudio、现成旁白或自己密钥的云端 TTS。
 - Claude Code：已验证 `npx skills add --agent claude-code` 安装与本地脚本；整片流程依赖所接入的生图能力。
 - VoxCPM2-8bit 权重约 3.23GB；这不是最低内存。8GB / 16GB 机器未在本项目中完成最低配置测试。
 - 已有图片、核对后的声音与时间戳，可以减少生成步骤；能否完全离线取决于这些输入是否齐全。

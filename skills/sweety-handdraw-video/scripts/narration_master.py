@@ -171,7 +171,7 @@ def generate_chunk(synthesize, chunk, path, seed, asr):
 
 def chunk_alignment(layout):
     """Beat ranges from chunk placement; caption cues inside each chunk from timestamps or pauses."""
-    from align import caption_texts, piece_ranges, entry
+    from align import caption_texts, piece_ranges
     captions = {}
     for chunk, offset, audio, words in layout:
         texts = [(unit['beat'], text) for unit in chunk['units'] for text in caption_texts(unit['text'])]

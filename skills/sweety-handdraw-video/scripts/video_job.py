@@ -10,7 +10,7 @@ import subprocess
 import sys
 import wave
 import numpy as np
-from PIL import Image, ImageFont
+from PIL import Image
 import stroke_assets
 from hand_assets import prepare_hand
 from art_direction import verify_art_direction

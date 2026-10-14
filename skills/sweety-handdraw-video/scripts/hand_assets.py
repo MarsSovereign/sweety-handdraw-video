@@ -1,6 +1,6 @@
 """Resolve calibrated hand presets and fit an optional label to the pen barrel."""
 from pathlib import Path
-from hosted_assets import resolve_asset, asset_available
+from hosted_assets import resolve_asset
 import json
 import math
 from PIL import Image, ImageDraw, ImageFont

@@ -68,7 +68,8 @@ else
   echo "ok: $VENV"
 fi
 if [ -x "$VENV/bin/python" ] && [ $PROBLEMS = 0 ]; then
-  "$VENV/bin/python" "$SKILL_DIR/scripts/validate_package.py" >/dev/null && echo "ok: package integrity"
+  if "$VENV/bin/python" "$SKILL_DIR/scripts/validate_package.py" >/dev/null; then echo "ok: package integrity"
+  else problem "package integrity -> reinstall the whole skill folder (see the validate_package.py error above)"; fi
   "$VENV/bin/python" "$SKILL_DIR/scripts/fonts.py" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); [print("ok: %s font %s#%s" % (k, *v["selected"])) for k, v in d.items()]' \
     || problem "Chinese font -> see the fonts.py error above"
 fi

@@ -51,7 +51,7 @@ python3 scripts/production_options.py JOB --defaults JOB/options/defaults.json
 ### 绘制方式：逐笔绘制或揭示
 
 - **逐笔绘制**（`drawing_mode: "draw"`）：只用于有清晰连续墨线、平涂上色的画风。引擎按部位整笔描线、再用马克笔上色，受线稿门槛和 `minimum_seconds` 约束。随包画风中 1、4、5、17、19、20 属于此类。
-- **揭示**（`drawing_mode: "reveal"`）：水彩、水粉、纸雕、像素、水墨、蜡笔、厚涂、3D 等没有墨线轮廓的画风。手带宽软笔刷按部位斜向扫过，画面只在刷过处显出成图；不做线稿提取，也不受线稿门槛约束，最短时长约每部位0.5–1秒。不要为这类画风硬造轮廓层。
+- **揭示**（`drawing_mode: "reveal"`）：水彩、水粉、纸雕、像素、水墨、蜡笔、厚涂、3D 等没有墨线轮廓的画风。手带宽软笔刷按部位斜向扫过，画面只在刷过处显出成图；不做线稿提取，也不受线稿门槛约束，整幅最短约2.5–3.6秒（实测2–7个部位的插画），远短于逐笔绘制。不要为这类画风硬造轮廓层。
 
 库内画风的绘制方式由目录固定（`style/catalog.json` 的 `drawing_mode`，选择窗口里会标明）；独立推理和自定义画风在 `resolved.json` 写明 `drawing_mode`。`job.json` 写 `"drawing": {"mode": "reveal"}`（默认 `draw`）与之保持一致，构建会核对；逐笔绘制的片子里个别插画可在动作的 `drawing` 中单独改用 `reveal`。
 
