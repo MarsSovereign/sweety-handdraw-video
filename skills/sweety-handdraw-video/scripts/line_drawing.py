@@ -32,8 +32,9 @@ def weighted_lengths(points):
 
 
 def lift_seconds(distance, fps=30, scale=1.):
-    """Pen-up time: 80-150 ms, never so short that min-jerk travel (peak 1.875x mean) exceeds ~70 px per frame."""
-    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (70. * fps))
+    """Pen-up time: 80-150 ms, never so short that the renderer's lifted move (75% of it in min-jerk motion,
+    peak 1.875x mean) exceeds 80 px per frame."""
+    return max((.08 + .07 * min(1., distance / 300.)) * scale, 1.875 * distance / (.75 * 80. * fps))
 
 
 def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):

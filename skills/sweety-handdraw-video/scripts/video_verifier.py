@@ -148,7 +148,9 @@ def verify_assets(root, timeline):
                         require(times.min()>=glyph['start']-1e-6 and times.max()<=glyph['end']+1e-6,
                                 f'{name}: a future character appears early')
                 entry['isolated_characters']=len(metadata['characters'])
-                require(distances.max() < 9, f'{name}: text is too far from the nib')
+                # Stroke-order glyphs reveal a whole brush width (up to ~0.13 em) around the median under the nib.
+                limit = max(9, .15 * metadata['font_size']) if metadata.get('handwriting', {}).get('mode') == 'stroke_order' else 9
+                require(distances.max() < limit, f'{name}: text is too far from the nib')
             else:
                 require((distances <= radii + .04).all(), f'{name}: marker outside the active brush')
             entry['maximum_tip_distance_px'] = float(distances.max())
