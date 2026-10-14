@@ -92,12 +92,16 @@ def main():
     (root / 'job.json').write_text(original)
     if stale.returncode == 0 or 'Manifest changed' not in stale.stderr:
         raise AssertionError('A stale manifest was incorrectly accepted')
+    stages = [item['stage'] for item in json.loads((root / 'work' / 'timing.json').read_text())['records']]
+    if stages[:4] != ['doctor', 'build', 'render', 'verify']:
+        raise AssertionError('Tool stages were not timed: ' + ', '.join(stages))
     if rare and rare not in timeline['cues'][-1]['text']:
         raise AssertionError('Rare characters were dropped from the captions')
     report = {'status': 'offline_runtime_checks_passed', 'fixture_only': True, 'visual_acceptance_claimed': False, 'rare_glyphs': rare,
         'checks': ['variable pages and beat counts', 'actual-audio timing', '960x540 at 24fps',
                    'Chinese stroke tips and punctuation', 'tiny isolated color patch', 'ink-only artwork',
-                   'full H264/AAC decode', 'runtime fixtures cannot be delivered', 'changed manifest blocks old verification']}
+                   'full H264/AAC decode', 'runtime fixtures cannot be delivered', 'changed manifest blocks old verification',
+                   'stage timing records'] + (['rare glyph coverage'] if rare else [])}
     (root / 'smoke-result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
