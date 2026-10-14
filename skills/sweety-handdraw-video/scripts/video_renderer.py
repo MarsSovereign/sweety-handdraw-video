@@ -397,9 +397,17 @@ def mix_audio(root,timeline):
         samples=np.frombuffer(stream.readframes(stream.getnframes()),dtype='<i2')
     policy = timeline.get('audio_policy', {'background_music': False, 'layers': []})
     normalized_path=root/'normalized-narration.wav'
-    # Duplicating mono into two full-level channels adds 3 LU to stereo loudness.
-    subprocess.run(['ffmpeg','-y','-v','error','-i',str(root/'narration.wav'),'-af','loudnorm=I=-20:TP=-2:LRA=7',
-                    '-ar',str(rate),'-ac','1','-c:a','pcm_s16le',str(normalized_path)],check=True)
+    # 70 Hz high-pass removes rumble/DC; two-pass linear loudnorm applies one measured gain instead of
+    # dynamic pumping. Duplicating mono into two full-level channels adds 3 LU to stereo loudness.
+    target='highpass=f=70,loudnorm=I=-20:TP=-2:LRA=7'
+    analysis=subprocess.run(['ffmpeg','-hide_banner','-nostats','-i',str(root/'narration.wav'),'-af',target+':print_format=json','-f','null','-'],
+                            capture_output=True,text=True,check=True).stderr
+    measured=json.loads(analysis[analysis.rindex('{'):analysis.rindex('}')+1])
+    second=target+(':measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:measured_thresh={input_thresh}'
+                   ':offset={target_offset}:linear=true:print_format=json').format(**measured)
+    applied=subprocess.run(['ffmpeg','-y','-hide_banner','-nostats','-i',str(root/'narration.wav'),'-af',second,
+                            '-ar',str(rate),'-ac','1','-c:a','pcm_s16le',str(normalized_path)],capture_output=True,text=True,check=True).stderr
+    result=json.loads(applied[applied.rindex('{'):applied.rindex('}')+1])
     layers = policy.get('layers', [])
     if not layers:
         # No implicit soundtrack and no buffered amix/limiter tail on narration-only output.
@@ -419,7 +427,8 @@ def mix_audio(root,timeline):
         command.extend(['-filter_complex',';'.join(filters),'-map','[out]','-ar',str(rate),'-ac','2',str(root/'mix.wav')])
         subprocess.run(command,check=True)
     (root/'audio-mix-report.json').write_text(json.dumps({'background_music':policy.get('background_music',False),
-        'layers':layers,'narration_only':not layers,'delivery_notice':policy.get('delivery_notice',
+        'layers':layers,'narration_only':not layers,'narration_filter':target,'loudnorm_first_pass':measured,
+        'loudnorm_mode':result['normalization_type'],'delivery_notice':policy.get('delivery_notice',
         '默认未添加背景音乐；可自行合成，或在发布平台选择配乐。')},ensure_ascii=False,indent=2))
     with wave.open(str(root/'mix.wav'),'rb') as mixed_stream:
         mixed_seconds=mixed_stream.getnframes()/mixed_stream.getframerate()
