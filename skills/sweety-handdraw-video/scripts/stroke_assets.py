@@ -408,8 +408,8 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         maps.update(sketch=sketch_time, sketch_fade=np.array([line_end, .5 / total], np.float32))
     # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
     finite = lambda values: values[np.isfinite(values)]
-    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + ink_ramp).max(initial=0.), finite(full).max(initial=0.),
-                        finite(shade).max(initial=0.) + float(maps['shade_ramp'])]))
+    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + np.maximum(ink_ramp, 1 / illustration_layers.SHARP)).max(initial=0.), finite(full).max(initial=0.),
+                        finite(shade).max(initial=0.) + float(maps['shade_ramp'])] + ([float(maps['sketch_fade'].sum())] if sketches else [])))
     if ending > 1:
         for key in ('ink', 'ink_ramp', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
             if key in maps:

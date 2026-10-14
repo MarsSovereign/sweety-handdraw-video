@@ -3,12 +3,13 @@ region's principal axis (rounded turns, no lift inside a region), then a few bro
 import math
 import numpy as np
 from scipy import ndimage
-from line_drawing import SPEED_FACTOR, lift_seconds, weighted_lengths
+from line_drawing import lift_seconds, weighted_lengths
 
 FILL_SPEED = 700.     # px/s of marker travel for a person coloring at 1080p
 SHADE_SECONDS = .35   # per shaded part, at human pace
 SHADE_RAMP = .3       # seconds over which a broad soft stroke blends flat color into the source
 SCALES = (1., 1.5, 2., 3.)
+FILL_FACTOR = 6.      # coloring cap: a broad marker has no detail to follow, so time-lapsed coloring reads as human at 6x
 
 
 def inpaint_lines(pixels, line_zone):
@@ -209,13 +210,13 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
 
 def requirements(regions, rgb, part_count, tip, speed=1., fps=30):
     """Seconds for: base marker at human pace with shading; a 1.5x marker at the cap with shading;
-    the broadest marker at the cap without shading."""
+    the broadest marker at the cap with short lifts and no shading."""
     shading = shaded_parts(regions, rgb, part_count)
     result = {}
-    for key, scale, pace, shade in (('required', SCALES[0], FILL_SPEED * speed, shading), ('moderate', SCALES[1], FILL_SPEED * speed * SPEED_FACTOR, shading),
-                                    ('minimum', SCALES[-1], FILL_SPEED * speed * SPEED_FACTOR, [])):
+    for key, scale, pace, shade, lifts in (('required', SCALES[0], FILL_SPEED * speed, shading, 1.), ('moderate', SCALES[1], FILL_SPEED * speed * FILL_FACTOR, shading, 1.),
+                                           ('minimum', SCALES[-1], FILL_SPEED * speed * FILL_FACTOR, [], .5)):
         plan(regions, scale)
-        result[key] = timeline(regions, shade, part_count, tip, pace, fps=fps)[3]
+        result[key] = timeline(regions, shade, part_count, tip, pace, lifts, fps=fps)[3]
     return result
 
 
@@ -224,7 +225,7 @@ def schedule(regions, rgb, part_count, tip, budget, start, total, speed=1., fps=
     up to the cap; shading is dropped before the cap is exceeded. Returns segments, per-part [start, end]
     fractions, shading bands, end fraction, pen tip and counts."""
     shading = shaded_parts(regions, rgb, part_count)
-    base, cap = FILL_SPEED * speed, FILL_SPEED * speed * SPEED_FACTOR
+    base, cap = FILL_SPEED * speed, FILL_SPEED * speed * FILL_FACTOR
     seconds = lambda pace, lifts=1., shade=None: timeline(regions, shading if shade is None else shade, part_count, tip, pace, lifts, fps=fps)[3]
     for scale in SCALES:
         plan(regions, scale)

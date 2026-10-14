@@ -220,8 +220,9 @@ def taper(stroke):
     return .3 + .7 * envelope * envelope * (3 - 2 * envelope)
 
 
-def stamp(stroke, shape, alpha, color, hit, touch, owner, times, ramp, opacity):
+def stamp(stroke, shape, alpha, color, records, times, opacity):
     radius = stroke['radius'] * taper(stroke)
+    fade = stroke.get('fade_ramp', 0.) if stroke['fade'] else 0.
     for k, ((x, y), r) in enumerate(zip(stroke['points'], radius)):
         left, right = int(max(0, x - r - 2)), int(min(shape[1], x + r + 3))
         top, bottom = int(max(0, y - r - 2)), int(min(shape[0], y + r + 3))
@@ -233,12 +234,11 @@ def stamp(stroke, shape, alpha, color, hit, touch, owner, times, ramp, opacity):
         stronger = coverage > alpha[window]
         color[window][stronger] = stroke['color'][k]
         np.maximum(alpha[window], coverage, out=alpha[window])
-        for target, mask in ((hit, coverage > .3), (touch, coverage > 0)):
-            earlier = mask & (times[k] < target[window])
-            target[window][earlier] = times[k]
-            if target is hit:
-                owner[window][earlier] = stroke['part']
-                ramp[window][earlier] = stroke.get('fade_ramp', 0.) if stroke['fade'] else 0.
+        for threshold, time, owner, ramp in records:
+            earlier = (coverage > threshold) & (times[k] < time[window])
+            time[window][earlier] = times[k]
+            owner[window][earlier] = stroke['part']
+            ramp[window][earlier] = fade
 
 
 def render(shape, strokes):
@@ -246,10 +246,8 @@ def render(shape, strokes):
     Each pixel's reveal time is when the nib passes it (or the soft fade start for undrawn texture)."""
     alpha = np.zeros(shape, np.float32)
     color = np.zeros(shape + (3,), np.float32)
-    hit = np.full(shape, np.inf, np.float32)
-    touch = np.full(shape, np.inf, np.float32)
-    owner = np.full(shape, -1, np.int16)
-    ramp = np.zeros(shape, np.float32)
+    # Solid hits (coverage > .3) decide time/owner; faint anti-alias edges fall back to their first touch.
+    records = [(threshold, np.full(shape, np.inf, np.float32), np.full(shape, -1, np.int16), np.zeros(shape, np.float32)) for threshold in (.3, 0.)]
     for stroke in strokes:
         count = len(stroke['points'])
         if stroke['fade']:
@@ -258,13 +256,10 @@ def render(shape, strokes):
         else:
             times = stroke['times']
             opacity = (.9 + .1 * hashed(stroke['index'] + 7)) * (1 + .05 * np.sin(np.linspace(0, 3, count) + stroke['index']))
-        stamp(stroke, shape, alpha, color, hit, touch, owner, times, ramp, np.clip(opacity, 0, 1))
-    touched_only = ~np.isfinite(hit) & np.isfinite(touch)
-    if touched_only.any():
-        _, nearest = ndimage.distance_transform_edt(~np.isfinite(hit), return_indices=True)
-        owner[touched_only] = owner[nearest[0], nearest[1]][touched_only]
-        ramp[touched_only] = ramp[nearest[0], nearest[1]][touched_only]
-        hit[touched_only] = touch[touched_only]
+        stamp(stroke, shape, alpha, color, records, times, np.clip(opacity, 0, 1))
+    (_, hit, owner, ramp), (_, touch, touch_owner, touch_ramp) = records
+    only = ~np.isfinite(hit) & np.isfinite(touch)
+    hit[only], owner[only], ramp[only] = touch[only], touch_owner[only], touch_ramp[only]
     return color, alpha, hit, ramp, owner
 
 
