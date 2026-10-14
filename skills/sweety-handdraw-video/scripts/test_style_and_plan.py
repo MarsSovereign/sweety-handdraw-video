@@ -28,8 +28,8 @@ class StyleAndPlanTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def choose(self, mode, identity=None):
-        selection={'mode':mode,'confirmation':'explicit_user_request','evidence':'Isolated test selection'}
+    def choose(self, mode, identity=None, confirmation='explicit_user_request'):
+        selection={'mode':mode,'confirmation':confirmation,'evidence':'Isolated test selection'}
         if mode=='catalog':
             selection['catalog_id']=identity
         if mode=='custom':
@@ -74,6 +74,23 @@ class StyleAndPlanTests(unittest.TestCase):
         resolved['drawing_mode']='draw';self.save_resolution(resolved)
         with self.assertRaisesRegex(ValueError,'catalog value'):
             verify_style(self.root)
+        self.choose('catalog_auto','17')
+        self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
+        resolved=self.choose('catalog_auto','11')
+        with self.assertRaisesRegex(ValueError,'drawn styles 1, 4, 5, 17, 19, 20'):
+            verify_style(self.root)
+        resolved['reveal_reason']='The user asked for a soft watercolor look';self.save_resolution(resolved)
+        self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
+        self.choose('catalog','11','timeout_default')
+        with self.assertRaisesRegex(ValueError,'reveal_reason'):
+            verify_style(self.root)
+        resolved=self.choose('inferred',confirmation='user_delegated')
+        resolved['drawing_mode']='reveal';self.save_resolution(resolved)
+        with self.assertRaisesRegex(ValueError,'reveal_reason'):
+            verify_style(self.root)
+        resolved=self.choose('inferred')
+        resolved['drawing_mode']='reveal';self.save_resolution(resolved)
+        self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
 
     def test_inferred_and_custom_cannot_borrow_a_catalog_recipe(self):
         for mode in ('inferred','custom'):

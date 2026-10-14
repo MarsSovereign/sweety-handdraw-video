@@ -18,7 +18,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 # (watercolor, gouache, paper cut, pixel, ink wash, crayon, painterly, 3D) are revealed by the brush instead.
 DRAWN_STYLES = {'1', '4', '5', '17', '19', '20'}
 MODE_LABELS = {
-    'catalog_auto': '不主动选择，由模型自动匹配',
+    'catalog_auto': '不主动选择，由模型自动匹配（优先逐笔绘制的画风）',
     'inferred': '不选择列表中的，模型推理产出',
     'custom': '自定义描述风格',
 }
@@ -134,6 +134,10 @@ def verify_style(job):
     if drawing_mode not in ('draw', 'reveal') or (expected and drawing_mode != expected):
         raise ValueError('style/resolved.json needs drawing_mode: "draw" only for clean ink outlines with flat color, otherwise "reveal"; '
                          'catalog styles keep the catalog value' + (f' ("{expected}")' if expected else ''))
+    model_chosen = selection['mode'] == 'catalog_auto' or selection['confirmation'] in ('timeout_default', 'user_delegated')
+    if model_chosen and drawing_mode == 'reveal' and not resolved.get('reveal_reason'):
+        raise ValueError('A style the model picks should be one of the drawn styles ' + ', '.join(sorted(DRAWN_STYLES, key=float))
+                         + '; a reveal style needs reveal_reason: why this content cannot be drawn in one of them')
     return {'mode': selection['mode'], 'name': resolved['style_name'], 'resolved_sha256': digest(resolved_path), 'drawing_mode': drawing_mode}
 
 

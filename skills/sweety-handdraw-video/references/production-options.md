@@ -9,14 +9,14 @@
 ```json
 {
   "content":"用户的实际主题或故事摘要",
-  "style":{"mode":"inferred"},
+  "style":{"mode":"catalog","catalog_id":"17"},
   "hand":{"preset":"pen-only"},
   "voice":{"voice":"magnetic-narrator"},
   "advertising":{"text":""},
   "watermark":{"text":""},
   "captions":{"mode":"quiet"},
   "rationale":{
-    "style":"这段生活机制需要独立设计的简洁人物与道具",
+    "style":"墨线绘本适合生活机制里的简洁人物与道具，可以逐笔绘制",
     "hand":"仅画笔减少对小幅机制图的遮挡",
     "voice":"磁性解说男声适合这段平实讲解",
     "captions":"浅色画面适合无底板深灰短句"
@@ -24,9 +24,9 @@
 }
 ```
 
-示例不是固定默认。画风可选编号 `catalog`、`catalog_auto`、`inferred`、`custom`；完整约定见[画风文件](style-and-drawing.md)。字幕可选 `quiet` 或 `plate`。
+示例不是固定默认。画风默认优先从逐笔绘制的 1、4、5、17、19、20 中按内容选一个编号，窗口里会预先显示这个选择；只有内容确实需要无轮廓质感时才默认揭示画风，并写 `reveal_reason`（见[画风文件](style-and-drawing.md)）。画风可选编号 `catalog`、`catalog_auto`、`inferred`、`custom`；完整约定见[画风文件](style-and-drawing.md)。字幕可选 `quiet` 或 `plate`。
 
-用户已经明确的选择放 `options/explicit.json`，键与上述六项一致；这些项跳过等待。用户说“自动选择全部”时把模型拟定的方案记录为委托自动执行，不再强行展示六轮选项。修订已完成影片时沿用已认可选择，除非本次要求改变。
+用户已经明确的选择放 `options/explicit.json`，键与上述六项一致；这些项跳过等待。用户说“自动选择全部”时把模型拟定的方案记录为委托自动执行（画风的 `confirmation` 为 `user_delegated`），不再强行展示六轮选项。修订已完成影片时沿用已认可选择，除非本次要求改变。
 
 ```bash
 python3 scripts/production_options.py JOB --defaults JOB/options/defaults.json --explicit JOB/options/explicit.json
