@@ -4,30 +4,39 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install runtime dependencies
+      - name: Install with the bundled setup script (FFmpeg, CJK fonts on Linux, venv)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg fonts-noto-cjk
-          python -m pip install -r skills/sweety-handdraw-video/scripts/requirements.txt
-      - name: Verify integrity and drawing regressions
+          bash skills/sweety-handdraw-video/scripts/setup.sh
+          bash skills/sweety-handdraw-video/scripts/setup.sh --check
+          echo "PY=$HOME/.local/share/sweety-handdraw-video/venv/bin/python" >> "$GITHUB_ENV"
+      - name: Report font discovery and rare-glyph coverage
         run: |
-          python skills/sweety-handdraw-video/scripts/validate_package.py
-          python -m unittest discover -s skills/sweety-handdraw-video/scripts -p 'test*.py' -v
+          if command -v fc-match >/dev/null; then fc-match -f '%{file}|%{index}|%{family}\n' 'sans-serif:lang=zh-cn'; fi
+          "$PY" skills/sweety-handdraw-video/scripts/fonts.py --text 犇羴鱻龘囧槑
+      - name: Verify integrity and regressions
+        run: |
+          "$PY" skills/sweety-handdraw-video/scripts/validate_package.py
+          "$PY" -m unittest discover -s skills/sweety-handdraw-video/scripts -p 'test*.py' -v
       - name: Exercise offline pipeline and package
         run: |
-          python skills/sweety-handdraw-video/scripts/smoke_test.py --output /tmp/handdraw-ci
-          python tools/package.py --output dist
+          "$PY" skills/sweety-handdraw-video/scripts/smoke_test.py --output /tmp/handdraw-ci
+          "$PY" tools/package.py --output dist
       - name: Report encoded stream timing
         if: always()
         run: |
           ffmpeg -version | head -1
           if test -f /tmp/handdraw-ci/outputs/film.mp4; then
             ffprobe -v error -show_entries stream=codec_name,duration,nb_frames,start_time -of json /tmp/handdraw-ci/outputs/film.mp4
-            python -c "import wave; p='/tmp/handdraw-ci/work/mix.wav'; w=wave.open(p); print('Mixed WAV seconds:', w.getnframes()/w.getframerate())"
+            "$PY" -c "import wave; p='/tmp/handdraw-ci/work/mix.wav'; w=wave.open(p); print('Mixed WAV seconds:', w.getnframes()/w.getframerate())"
+            cat /tmp/handdraw-ci/work/timing.json
           fi
