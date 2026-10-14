@@ -61,6 +61,7 @@ def fix_commands(report):
     if not report['narration_files_available']:
         fixes.append('Narration: start the local VoiceStudio service (http://127.0.0.1:3900) then python3 scripts/voice_studio.py JOB; '
                      'or set voxcpm.model_path and run python3 scripts/voxcpm_voice.py JOB with the MLX Python; '
+                     'or, only with the user\'s own key, volcengine_tts.py / gemini_tts.py; '
                      'or supply narration.source + alignment (references/continuous-narration.md)')
     fixes.append('Images: Codex has built-in image generation; Claude Code needs an image-generation tool/MCP or user-provided images. '
                  'Scripts cannot detect this; without it, stop instead of producing a text-only film.')
@@ -96,15 +97,12 @@ def inspect_environment(job_directory):
     except (ValueError,FileNotFoundError,KeyError) as error:
         report['art_direction_error']=str(error)
     if not manifest.get('runtime_fixture'):
-        try:
-            import requests
-            response=requests.get(manifest.get('voice_studio',{}).get('url','http://127.0.0.1:3900')+'/engines/tts',timeout=5)
-            response.raise_for_status()
-            report['voice_studio']={'available':True,'active':response.json().get('active')}
-        except Exception as error:
-            report['voice_studio']={'available':False,'message':'VoiceStudio 未安装、未启动或不可达；无法生成旁白，请先安装并启动。'}
+        from voice_backends import voice_backends_report
+        backends = voice_backends_report(manifest.get('voice_studio', {}).get('url', 'http://127.0.0.1:3900'))
         model = manifest.get('voxcpm', {}).get('model_path')
-        report['voxcpm'] = {'configured': bool(model), 'model_installed': bool(model) and (Path(model).expanduser()/'config.json').is_file()}
+        if model and (Path(model).expanduser()/'config.json').is_file():
+            backends['local_voxcpm2'].update(model=str(Path(model).expanduser()), available=bool(backends['local_voxcpm2']['python']))
+        report['voice_backends'] = backends
     report['narration_files_available'] = all(beat.get('audio') and resolve_input(root,beat['audio']).is_file()
         for page in manifest['pages'] for beat in page['beats'])
     if manifest.get('narration'):
@@ -121,7 +119,8 @@ def inspect_environment(job_directory):
     report['ready'] = renderable and not report['missing_inputs'] and report['narration_files_available']
     report['capabilities'] = {
         'render': renderable,
-        'generate_narration': report.get('voice_studio', {}).get('available', False) or report.get('voxcpm', {}).get('model_installed', False),
+        'generate_narration': bool(report.get('voice_backends') and (report['voice_backends']['local_voxcpm2']['available'] or report['voice_backends']['voice_studio']['reachable']
+                                                                     or any(report['voice_backends']['cloud_optional'].values()))),
         'narration_ready': report['narration_files_available'],
         'generate_images': 'host-dependent: not detectable by scripts'}
     report['fixes'] = fix_commands(report)

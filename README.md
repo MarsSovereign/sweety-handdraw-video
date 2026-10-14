@@ -278,14 +278,18 @@ VoiceStudio 需要 `/engines/tts`、`/generate` 及可选 `/transcribe` 接口�
 |---|---|---|
 | 逼真男声 | [《那条死于愤怒的蛇》节选](skills/sweety-handdraw-video/assets/voices/previews/realistic-man.wav) | 沿用该片原始参考；公共安装需自行导入 |
 | 逼真女声 | [《快乐囚禁你的方式》节选](skills/sweety-handdraw-video/assets/voices/previews/bilibili-outro.wav) | 沿用当前原片提取人声；公共安装需自行导入 |
+| 磁性解说男声（默认） | [同文试听](skills/sweety-handdraw-video/assets/voices/previews/magnetic-narrator.wav) | 随包合成参考，可直接生成 |
+| 儒雅青年 | [同文试听](skills/sweety-handdraw-video/assets/voices/previews/scholarly-young-man.wav) | 随包合成参考，可直接生成 |
+| 温柔知性女声 | [同文试听](skills/sweety-handdraw-video/assets/voices/previews/gentle-intellectual-woman.wav) | 随包合成参考，可直接生成 |
+| 悬疑故事解说 | [同文试听](skills/sweety-handdraw-video/assets/voices/previews/suspense-storyteller.wav) | 随包合成参考，可直接生成 |
 
-<!-- v1.3：甜美学姐 / Iapetus / 知性女讲师 / 故事解说 已移除；新内置音色由声音目录合并时补入上表 -->
+四款合成声音由本机 VoxCPM2 仅凭文字描述设计，没有使用任何真人、主播或平台音色作参考，风格名只描述听感方向。也可以添加任意数量的自定义声音：本人录音或已获授权的声音，导入时声明授权，参考须通过杂音门禁。所有声音当前都待听感验收。
 
-两项均播放对应成片节选。成片节选只用于试听，不能反过来当作原片参考继续克隆。逼真女声目前暂用，听感仍待调整；改名不代表新增听感验收。
+两款逼真声音播放对应成片节选。成片节选只用于试听，不能反过来当作原片参考继续克隆。逼真女声目前暂用，听感仍待调整；改名不代表新增听感验收。
 
 作者本机已保存两款逼真声音的原始参考，可以直接选择。公共安装包不含这些录音：未导入时可以试听，但不能选择它们生成。导入方法见[本地声音运行](skills/sweety-handdraw-video/references/local-runtime.md)。个人目录和任务目录只能补充目录内各项的参考，不能把其他音色或旧名称加回选择器。
 
-可直接指定这六个名称之一，也可委托模型根据稿件选择。已有本机默认声音时优先沿用，本次明确选择优先。声音参考、逐字稿与生成参数分别保留；更换后端或稿件后仍需试听。
+可直接指定上表名称或自定义声音，也可委托模型根据稿件选择。已有本机默认声音时优先沿用，本次明确选择优先。声音参考、逐字稿与生成参数分别保留；更换后端或稿件后仍需试听。
 
 ## 从输入到成片
 

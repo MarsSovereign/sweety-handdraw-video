@@ -253,6 +253,22 @@
         "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/assets--style-previews--9.jpg"
       ]
     },
+    "assets/voices/gentle-intellectual-woman.wav": {
+      "bytes": 1307564,
+      "sha256": "f04d07b6681600a97b4c165183bd0bbb4eea25794a9ed4c835e1eb621aa0a605",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/gentle-intellectual-woman.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/gentle-intellectual-woman.wav"
+      ]
+    },
+    "assets/voices/magnetic-narrator.wav": {
+      "bytes": 1427564,
+      "sha256": "3fbd724c6ba25ef90f2f741702543226639149937818d1172cd6b6d88dd56700",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/magnetic-narrator.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/magnetic-narrator.wav"
+      ]
+    },
     "assets/voices/previews/bilibili-outro.wav": {
       "bytes": 354318,
       "sha256": "148a32a1f2f74a5d6adac8aa46fc9fe6b2f71d49519392c38a388211705d0c20",
@@ -262,13 +278,60 @@
         "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2.3/assets--voices--previews--bilibili-outro.wav"
       ]
     },
+    "assets/voices/previews/gentle-intellectual-woman.wav": {
+      "bytes": 629820,
+      "sha256": "2c8188e4a01eb45a8bfde36dbc1bd89571e68a29d038ad1d4d38e95bf71ce893",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/gentle-intellectual-woman.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/gentle-intellectual-woman.wav"
+      ]
+    },
+    "assets/voices/previews/magnetic-narrator.wav": {
+      "bytes": 676844,
+      "sha256": "918db7d6dc73cdcccfa75666ce02e3d0fec28094bd41340c7c735411089132ee",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/magnetic-narrator.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/magnetic-narrator.wav"
+      ]
+    },
     "assets/voices/previews/realistic-man.wav": {
-      "bytes": 453678,
-      "sha256": "ff660186321f8a21d01372a6276fd524115f118a109f2b7772cac27533ac974b",
+      "bytes": 453644,
+      "sha256": "fdffc60c72ea9d89642dda264a0ca69a70356b27421fca2a8e7b3d475ad5ea3a",
       "urls": [
         "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/realistic-man.wav",
-        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/realistic-man.wav",
-        "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2.3/assets--voices--previews--realistic-man.wav"
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/realistic-man.wav"
+      ]
+    },
+    "assets/voices/previews/scholarly-young-man.wav": {
+      "bytes": 666300,
+      "sha256": "dd11d85715c21119a904fd6bf40d2929e5e48b7443e07ecc38c22e944c77fe3d",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/scholarly-young-man.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/scholarly-young-man.wav"
+      ]
+    },
+    "assets/voices/previews/suspense-storyteller.wav": {
+      "bytes": 563564,
+      "sha256": "0497e3d245b98917aa286f7a227934cd32f27c867314bceb40e7a6aec14fb5a7",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/suspense-storyteller.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/previews/suspense-storyteller.wav"
+      ]
+    },
+    "assets/voices/scholarly-young-man.wav": {
+      "bytes": 1201004,
+      "sha256": "567e2e48b803c6b6f92d57226b2d5c16648ddfa9eacd045b2b252eb2be0222c0",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/scholarly-young-man.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/scholarly-young-man.wav"
+      ]
+    },
+    "assets/voices/suspense-storyteller.wav": {
+      "bytes": 1032044,
+      "sha256": "eabcd71f98ee34e00928c496cb94ef9afed70c9bb3f3de180b350adca201484a",
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/suspense-storyteller.wav",
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/voices/suspense-storyteller.wav"
       ]
     }
   }

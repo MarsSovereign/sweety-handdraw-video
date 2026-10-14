@@ -15,7 +15,7 @@
   "canvas": {"width": 1920, "height": 1080, "fps": 30},
   "cover": {"source": "inputs/cover.png", "seconds": 1.0},
   "hand": {"preset": "navy", "pen_text": ""},
-  "voice_studio": {"voice": "iapetus"},
+  "voice_studio": {"voice": "magnetic-narrator"},
   "narration": {"source": "inputs/narration/master.wav", "alignment": "inputs/narration/alignment.json"},
   "audio": {"end_hold_seconds": 0.45},
   "pages": [{"beats": [{
