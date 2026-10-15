@@ -110,6 +110,21 @@ class DrawEngineTests(unittest.TestCase):
         outline = stroke_assets.prepare_artwork(source, 300, 300)['outline']
         self.assertFalse(lineart_gate.evaluate(outline)['passed'])
 
+    def test_cream_paper_is_background_not_a_region_to_colour(self):
+        # Style recipes ask for cream / warm-white paper; only the drawing may be inked and coloured, never the paper.
+        transparent, cream = self.directory / 'figure.png', self.directory / 'cream.png'
+        parts = figure(transparent)
+        paper = Image.new('RGBA', (280, 340), (252, 249, 240, 255))
+        paper.alpha_composite(Image.open(transparent), (20, 20))
+        paper.save(cream)
+        art = stroke_assets.prepare_artwork(cream, 280, 340)
+        self.assertEqual(art['alpha'][5, 5], 0)
+        self.assertEqual(art['alpha'][170, 90], 255)
+        expected = stroke_assets.build_illustration('plain', transparent, 240, 300, parts=parts, seconds=10)['drawability']['fill_area_px']
+        crop = [20, 20, 260, 320]
+        measured = stroke_assets.build_illustration('cream', cream, 240, 300, crop=crop, parts=parts, seconds=10)['drawability']['fill_area_px']
+        self.assertLess(abs(measured - expected), .05 * expected)
+
     def test_reveal_mode_paints_the_source_part_by_part_without_lines(self):
         # Styles without ink outlines: the line-art gate does not apply and the brush shows the finished picture.
         source = self.directory / 'texture.png'

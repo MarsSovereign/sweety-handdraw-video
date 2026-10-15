@@ -222,18 +222,29 @@ def build_brush(name, width, height, color, style='highlight', line_width=None, 
     return save_asset(name,rgba,reveal,segments,{'type':'marker_'+style})
 
 
+def paper_color(rgb):
+    """Median colour of the image border when it is light, near-neutral paper (cream, warm white); else white."""
+    ring = max(2, round(.02 * min(rgb.shape[:2])))
+    border = np.concatenate([rgb[:ring].reshape(-1, 3), rgb[-ring:].reshape(-1, 3), rgb[:, :ring].reshape(-1, 3), rgb[:, -ring:].reshape(-1, 3)])
+    paper = np.median(border, axis=0)
+    return paper if paper.min() >= 200 and np.ptp(paper) <= 30 else np.full(3, 255.)
+
+
 def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_path=None):
-    """Crop, remove a white background, fit the box, and find the drawable outline (shared with region marks)."""
+    """Crop, remove the paper background, fit the box, and find the drawable outline (shared with region marks)."""
     artwork=Image.open(source_path).convert('RGBA')
     source_size = artwork.size
+    # Generated art often sits on cream or warm-white paper: key against the paper measured on the whole source,
+    # not pure white, or the paper itself becomes a region the marker has to colour.
+    paper = paper_color(np.array(artwork)[:, :, :3].astype(float)) if artwork.getextrema()[3] == (255, 255) else None
     if crop is not None:
         left, top, right, bottom = crop
         if not (0 <= left < right <= artwork.width and 0 <= top < bottom <= artwork.height):
             raise ValueError('Artwork crop must stay inside the source image')
         artwork = artwork.crop(tuple(crop))
-    if artwork.getextrema()[3] == (255, 255):
+    if paper is not None:
         rgb = np.array(artwork)[:, :, :3]
-        alpha = np.rint(np.clip((253-rgb.min(axis=2).astype(float))/18, 0, 1)*255).astype(np.uint8)
+        alpha = np.rint(np.clip(((paper - 2) - rgb).max(axis=2) / 18, 0, 1) * 255).astype(np.uint8)
         artwork = Image.fromarray(np.dstack([rgb, alpha]))
     scale = min(max_width/artwork.width, max_height/artwork.height)
     artwork = artwork.resize((max(1,round(artwork.width*scale)),max(1,round(artwork.height*scale))),Image.Resampling.LANCZOS)
