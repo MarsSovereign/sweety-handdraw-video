@@ -76,6 +76,15 @@ class StyleAndPlanTests(unittest.TestCase):
             verify_style(self.root)
         self.choose('catalog_auto','17')
         self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
+        # A model-picked style is drawn and coloured; black-and-white style 1 needs a reason, a user's own pick does not.
+        for mode,identity,confirmation in (('catalog_auto','1','explicit_user_request'),('catalog','1','timeout_default'),('catalog','1','user_delegated')):
+            resolved=self.choose(mode,identity,confirmation)
+            with self.assertRaisesRegex(ValueError,'monochrome_reason'):
+                verify_style(self.root)
+            resolved['monochrome_reason']='The user asked for an xkcd-like black line look';self.save_resolution(resolved)
+            self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
+        self.choose('catalog','1','user_dialog')
+        self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
         resolved=self.choose('catalog_auto','11')
         with self.assertRaisesRegex(ValueError,'drawn styles 1, 4, 5, 17, 19, 20'):
             verify_style(self.root)

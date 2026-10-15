@@ -17,8 +17,9 @@ PACKAGE = Path(__file__).resolve().parents[1]
 # Bundled styles with clean ink outlines and flat color are drawn stroke by stroke; styles without outlines
 # (watercolor, gouache, paper cut, pixel, ink wash, crayon, painterly, 3D) are revealed by the brush instead.
 DRAWN_STYLES = {'1', '4', '5', '17', '19', '20'}
+MONOCHROME_STYLES = {'1'}  # pure black ink on paper: the picture is never coloured
 MODE_LABELS = {
-    'catalog_auto': '不主动选择，由模型自动匹配（优先逐笔绘制的画风）',
+    'catalog_auto': '不主动选择，由模型自动匹配（优先逐笔绘制、上色的画风）',
     'inferred': '不选择列表中的，模型推理产出',
     'custom': '自定义描述风格',
 }
@@ -71,7 +72,7 @@ def prepare_catalog(job, source):
         bundled = source == (PACKAGE/'dependencies/hand-drawn-styles').resolve()
         catalog.append({'id': identity, 'name': name, 'preview': preview,
                         'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path),
-                        **({'drawing_mode': 'draw' if identity in DRAWN_STYLES else 'reveal'} if bundled else {})})
+                        **({'drawing_mode': 'draw' if identity in DRAWN_STYLES else 'reveal', 'monochrome': identity in MONOCHROME_STYLES} if bundled else {})})
     if not catalog:
         raise ValueError('No numbered styles in the selected STYLES.md')
     catalog.sort(key=lambda entry: tuple(int(part) for part in entry['id'].split('.')))
@@ -113,7 +114,7 @@ def verify_style(job):
     specification = resolved.get('style_spec', {})
     if any(not specification.get(key) for key in ('line', 'palette', 'shading', 'texture', 'background')):
         raise ValueError('Style specification needs line, palette, shading, texture and background')
-    expected = None
+    expected, monochrome = None, False
     if selection['mode'] in ('catalog', 'catalog_auto'):
         identity = resolved.get('catalog_id')
         entry = next((entry for entry in catalog['styles'] if entry['id'] == identity), None)
@@ -124,6 +125,7 @@ def verify_style(job):
         if selection['mode'] == 'catalog_auto' and not resolved.get('content_fit'):
             raise ValueError('Automatic catalog matching needs a content-fit explanation')
         expected = entry.get('drawing_mode')
+        monochrome = entry.get('monochrome', False)
     elif resolved.get('catalog_id') or resolved.get('recipe_sha256') or resolved.get('catalog_recipe'):
         raise ValueError('Inferred/custom styles must be independent of hand-drawn recipes')
     if selection['mode'] == 'inferred' and not resolved.get('content_fit'):
@@ -138,6 +140,9 @@ def verify_style(job):
     if model_chosen and drawing_mode == 'reveal' and not resolved.get('reveal_reason'):
         raise ValueError('A style the model picks should be one of the drawn styles ' + ', '.join(sorted(DRAWN_STYLES, key=float))
                          + '; a reveal style needs reveal_reason: why this content cannot be drawn in one of them')
+    if model_chosen and monochrome and not resolved.get('monochrome_reason'):
+        raise ValueError('A style the model picks should be drawn and coloured: prefer ' + ', '.join(sorted(DRAWN_STYLES - MONOCHROME_STYLES, key=float))
+                         + '; black-and-white style 1 needs monochrome_reason: why this content must stay uncoloured')
     return {'mode': selection['mode'], 'name': resolved['style_name'], 'resolved_sha256': digest(resolved_path), 'drawing_mode': drawing_mode}
 
 
