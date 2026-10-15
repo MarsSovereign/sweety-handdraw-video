@@ -103,10 +103,14 @@ def verify_assets(root, timeline):
             require('owners' in maps and 'ink_owner' in maps and bool(metadata.get('parts')), f'{name}: missing semantic ownership; rebuild the asset')
             require((maps['owners'][alpha>0]>=0).all(), f'{name}: unowned illustration pixels')
             parts=metadata['parts']
-            require(max(part['outline_end'] for part in parts)<=min(part['fill_start'] for part in parts)+1e-6,
+            revealed = metadata.get('mode') == 'reveal'
+            entry['mode'] = 'reveal' if revealed else 'draw'
+            # A revealed picture has no outlines: "outlines before fill" does not apply, and is reported as such.
+            entry['outlines_before_fill'] = 'not_applicable' if revealed else 'pass'
+            require(revealed or max(part['outline_end'] for part in parts)<=min(part['fill_start'] for part in parts)+1e-6,
                     f'{name}: filling starts before all outlines are complete')
             # A stroke belongs wholly to one part (ink_owner); paint follows the pixel's part.
-            for phase,channel,owners in [('outline','ink',maps['ink_owner']),('fill','color',maps['owners'])]:
+            for phase,channel,owners in [('fill','color',maps['owners'])] if revealed else [('outline','ink',maps['ink_owner']),('fill','color',maps['owners'])]:
                 previous_end=0.
                 for index,part in enumerate(parts):
                     require(part[phase+'_start']>=previous_end-1e-6,f'{name}: semantic part order is broken')
@@ -164,6 +168,11 @@ def verify_job(job_directory, assets_only=False):
     from art_direction import verify_art_direction
     art_review=verify_art_direction(root,json.loads((root/'job.json').read_text()))
     report = {'duration_seconds': timeline['duration'], 'art_direction':art_review,'checks': {}, 'assets': verify_assets(root, timeline), 'pages': []}
+    pictures = [entry for entry in report['assets'] if entry['type'] == 'illustration']
+    report['pictures'] = {'drawn': sum(entry['mode'] == 'draw' for entry in pictures),
+                          'revealed': [entry['name'] for entry in pictures if entry['mode'] == 'reveal']}
+    require(not report['pictures']['revealed'] or art_review.get('style', {}).get('drawing_mode', 'reveal') == 'reveal',
+            'Revealed pictures in a drawn film: ' + ', '.join(report['pictures']['revealed']))
     if assets_only:
         print(json.dumps({'assets_checked': len(report['assets'])}))
         return report

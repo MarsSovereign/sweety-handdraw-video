@@ -136,10 +136,14 @@ def verify_style(job):
     if drawing_mode not in ('draw', 'reveal') or (expected and drawing_mode != expected):
         raise ValueError('style/resolved.json needs drawing_mode: "draw" only for clean ink outlines with flat color, otherwise "reveal"; '
                          'catalog styles keep the catalog value' + (f' ("{expected}")' if expected else ''))
+    # Reveal brushes the finished image in region by region: it gives up drawing, so only the user can trade drawing
+    # for a look. Clicking a card the picker labels "揭示" is that choice; any other route needs the user's own answer.
+    informed_pick = selection['mode'] == 'catalog' and selection['confirmation'] == 'user_dialog'
+    if drawing_mode == 'reveal' and not informed_pick and not str(resolved.get('reveal_accepted', '')).strip():
+        raise ValueError('Reveal replaces stroke-by-stroke drawing, so only the user may choose it. Resolve a drawable version of '
+                         'this look (clean continuous ink outlines, flat colour) with drawing_mode "draw"; or tell the user that '
+                         'this look can only be brushed in, not drawn, and record their answer in resolved.json reveal_accepted')
     model_chosen = selection['mode'] == 'catalog_auto' or selection['confirmation'] in ('timeout_default', 'user_delegated')
-    if model_chosen and drawing_mode == 'reveal' and not resolved.get('reveal_reason'):
-        raise ValueError('A style the model picks should be one of the drawn styles ' + ', '.join(sorted(DRAWN_STYLES, key=float))
-                         + '; a reveal style needs reveal_reason: why this content cannot be drawn in one of them')
     if model_chosen and monochrome and not resolved.get('monochrome_reason'):
         raise ValueError('A style the model picks should be drawn and coloured: prefer ' + ', '.join(sorted(DRAWN_STYLES - MONOCHROME_STYLES, key=float))
                          + '; black-and-white style 1 needs monochrome_reason: why this content must stay uncoloured')

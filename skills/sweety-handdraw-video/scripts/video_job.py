@@ -227,9 +227,12 @@ class FilmBuilder:
         elif kind == 'illustration':
             source = resolve_input(self.root, action['source'])
             optional = lambda key: resolve_input(self.root, action[key]) if action.get(key) else None
+            drawing = {**self.manifest.get('drawing', {}), **action.get('drawing', {})}
+            if drawing.get('mode') == 'reveal' and self.art_direction.get('style', {}).get('drawing_mode') == 'draw':
+                raise ValueError(f'{action["source"]}: this film is drawn; one picture cannot switch to reveal. Simplify or regenerate it so it can be drawn')
             metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'), action.get('parts'),
                 optional('outline_mask'), seconds=seconds, region_map_path=optional('region_map'), part_regions=action.get('part_regions'),
-                lineart_exception=action.get('lineart_exception'), drawing={**self.manifest.get('drawing', {}), **action.get('drawing', {})})
+                lineart_exception=action.get('lineart_exception'), drawing=drawing)
         else:
             raise ValueError(f'Unsupported action type: {kind}')
         self.assets[name] = metadata

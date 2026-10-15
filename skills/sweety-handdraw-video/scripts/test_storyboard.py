@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 from PIL import Image, ImageDraw
 from narration_master import script_text, sha256
-from storyboard_lint import MAX_DRAWING_SHARE, check_build, drawing_share, drawing_time, plan, timing, usage
+from storyboard_lint import MAX_DRAWING_SHARE, check_build, drawing_time, pen_busy_share, pen_time, plan, timing, usage
 from video_job import FilmBuilder, save_wave
 import test_style_and_plan as style_tests
 
@@ -114,15 +114,22 @@ class StoryboardTimingTests(unittest.TestCase):
         timeline['assets']['e']['drawability']['minimum_seconds'] = 3
         errors, warnings = drawing_time(timeline)
         self.assertEqual(errors, [])
-        self.assertIn('minor strokes will fade', warnings[0])
+        self.assertIn('the pen hurries', warnings[0])
 
-    def test_drawing_share_counts_pen_time_once(self):
+    def test_pen_busy_share_counts_pen_time_once_and_pen_time_names_what_it_did(self):
         # The finished pictures must get time to hold: overlapping events count once, captions not at all.
         page = lambda start, end, events: {'beats': [{'start': start}], 'speech_end': end,
-                                           'events': [{'caption': False, 'start': a, 'end': b} for a, b in events] + [{'caption': True, 'start': start, 'end': end}]}
-        timeline = {'pages': [page(1, 11, [(1.5, 4), (3, 6)]), page(11, 21, [(11.5, 20.5)])]}
-        self.assertAlmostEqual(drawing_share(timeline), (4.5 + 9) / 20)
-        self.assertGreater(drawing_share(timeline), MAX_DRAWING_SHARE - .1)
+                                           'events': [{'caption': False, 'start': a, 'end': b, 'asset': name} for a, b, name in events]
+                                           + [{'caption': True, 'start': start, 'end': end}]}
+        drawn = {'type': 'illustration', 'segments': [{'kind': 'ink', 'start': 0, 'end': .4}, {'kind': 'travel', 'start': .4, 'end': .5},
+                                                       {'kind': 'color', 'start': .5, 'end': 1}]}
+        timeline = {'pages': [page(1, 11, [(1.5, 4, 'title'), (3, 6, 'drawn')]), page(11, 21, [(11.5, 20.5, 'revealed')])],
+                    'assets': {'title': {'type': 'handwritten_text', 'segments': [{'kind': 'ink', 'start': 0, 'end': 1}]}, 'drawn': drawn,
+                               'revealed': {'type': 'illustration', 'mode': 'reveal', 'segments': [{'kind': 'color', 'start': 0, 'end': 1}]}}}
+        self.assertAlmostEqual(pen_busy_share(timeline), (4.5 + 9) / 20)
+        self.assertGreater(pen_busy_share(timeline), MAX_DRAWING_SHARE - .1)
+        # A revealed picture is pen time but not drawing: the report keeps it apart from lines and colour.
+        self.assertEqual(pen_time(timeline), {'line': .06, 'colour': .075, 'reveal': .45, 'handwriting': .125, 'marker': 0., 'pen_up': .015})
 
     def test_production_build_requires_a_storyboard(self):
         with self.assertRaisesRegex(ValueError, 'Production requires a storyboard'):

@@ -69,7 +69,8 @@ class StyleAndPlanTests(unittest.TestCase):
         modes={entry['id']:entry['drawing_mode'] for entry in bundled['styles']}
         self.assertEqual((modes['1'],modes['20'],modes['11'],modes['13'],modes['9']),('draw','draw','reveal','reveal','reveal'))
         self.catalog=bundled
-        resolved=self.choose('catalog','11')
+        # Clicking a card the picker labels as revealed is the user's informed choice.
+        resolved=self.choose('catalog','11','user_dialog')
         self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
         resolved['drawing_mode']='draw';self.save_resolution(resolved)
         with self.assertRaisesRegex(ValueError,'catalog value'):
@@ -85,21 +86,15 @@ class StyleAndPlanTests(unittest.TestCase):
             self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
         self.choose('catalog','1','user_dialog')
         self.assertEqual(verify_style(self.root)['drawing_mode'],'draw')
-        resolved=self.choose('catalog_auto','11')
-        with self.assertRaisesRegex(ValueError,'drawn styles 1, 4, 5, 17, 19, 20'):
-            verify_style(self.root)
-        resolved['reveal_reason']='The user asked for a soft watercolor look';self.save_resolution(resolved)
-        self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
-        self.choose('catalog','11','timeout_default')
-        with self.assertRaisesRegex(ValueError,'reveal_reason'):
-            verify_style(self.root)
-        resolved=self.choose('inferred',confirmation='user_delegated')
-        resolved['drawing_mode']='reveal';self.save_resolution(resolved)
-        with self.assertRaisesRegex(ValueError,'reveal_reason'):
-            verify_style(self.root)
-        resolved=self.choose('inferred')
-        resolved['drawing_mode']='reveal';self.save_resolution(resolved)
-        self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
+        # Every other route to reveal gives up drawing without the user knowing: it needs the user's own answer.
+        for mode,identity,confirmation in (('catalog_auto','11','user_dialog'),('catalog','11','timeout_default'),('catalog','11','explicit_user_request'),
+                                           ('inferred',None,'user_delegated'),('inferred',None,'explicit_user_request'),('custom',None,'user_dialog')):
+            resolved=self.choose(mode,identity,confirmation)
+            resolved['drawing_mode']='reveal';self.save_resolution(resolved)
+            with self.assertRaisesRegex(ValueError,'only the user may choose it'):
+                verify_style(self.root)
+            resolved['reveal_accepted']='User: keep the ink-wash look even though it is brushed in, not drawn';self.save_resolution(resolved)
+            self.assertEqual(verify_style(self.root)['drawing_mode'],'reveal')
 
     def test_inferred_and_custom_cannot_borrow_a_catalog_recipe(self):
         for mode in ('inferred','custom'):

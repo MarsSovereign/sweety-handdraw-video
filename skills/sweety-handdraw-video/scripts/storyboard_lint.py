@@ -55,7 +55,7 @@ def group_beats(beat_ids, group):
 
 
 STROKES_PER_SECOND = 3.5  # measured draw-v2 pace at the cap: contour strokes, pen lifts and marker color included
-MAX_DRAWING_SHARE = .7    # the pen draws at most this share of the narration; the finished pictures hold the rest
+MAX_DRAWING_SHARE = .7    # the pen is busy at most this share of the narration; the finished pictures hold the rest
 
 
 def tier(seconds, hold):
@@ -279,19 +279,44 @@ def drawing_time(timeline):
                 errors.append(f'{label}: {window:.1f}s drawing window but the image needs at least {measured["minimum_seconds"]:.1f}s{strokes}; '
                               'simplify the image or extend its window across beats with a page visual group')
             elif window < max(measured.get('minimum_seconds', 0), measured.get('required_seconds', 0) / VIDEO_LAPSE) - .05:
-                effect = 'minor strokes will fade in' if measured.get('stroke_count') else 'the brush sweeps faster than a relaxed pace'
-                warnings.append(f'{label}: {window:.1f}s window is shorter than video pace; {effect}')
+                warnings.append(f'{label}: {window:.1f}s window is shorter than video pace; the pen hurries above it')
     return errors, warnings
 
 
-def drawing_share(timeline):
-    """Share of the narration during which the pen is drawing (overlaps merged)."""
+def narration_seconds(timeline):
+    return max(1e-6, timeline['pages'][-1]['speech_end'] - timeline['pages'][0]['beats'][0]['start'])
+
+
+def pen_busy_share(timeline):
+    """Share of the narration during which the pen is on the page at all (overlaps merged): what the finished
+    pictures cannot use for holding. It counts lines, colour, reveal, writing and pen-up moves alike."""
     spans = sorted((event['start'], event['end']) for page in timeline['pages'] for event in page['events'] if not event['caption'])
     covered, reach = 0., -math.inf
     for start, end in spans:
         covered += max(0., end - max(start, reach))
         reach = max(reach, end)
-    return covered / max(1e-6, timeline['pages'][-1]['speech_end'] - timeline['pages'][0]['beats'][0]['start'])
+    return covered / narration_seconds(timeline)
+
+
+def pen_time(timeline):
+    """What the pen spends the narration on, as shares: line (ink and sketch strokes of drawn pictures), colour
+    (their marker and shading), reveal (pictures brushed in from the finished image), handwriting, marker, pen_up."""
+    shares = dict.fromkeys(('line', 'colour', 'reveal', 'handwriting', 'marker', 'pen_up'), 0.)
+    for page in timeline['pages']:
+        for event in page['events']:
+            if event['caption']:
+                continue
+            asset = timeline['assets'][event['asset']]
+            for segment in asset.get('segments', []):
+                kind = segment['kind']
+                if kind == 'travel':
+                    key = 'pen_up'
+                elif asset['type'] == 'illustration':
+                    key = 'reveal' if asset.get('mode') == 'reveal' else 'line' if kind in ('ink', 'sketch') else 'colour'
+                else:
+                    key = 'handwriting' if asset['type'] == 'handwritten_text' else 'marker'
+                shares[key] += (segment['end'] - segment['start']) * (event['end'] - event['start'])
+    return {key: round(value / narration_seconds(timeline), 3) for key, value in shares.items()}
 
 
 def check_build(root, manifest, timeline):
@@ -305,12 +330,13 @@ def check_build(root, manifest, timeline):
         beats = [beat for page in timeline['pages'] for beat in page['beats']]
         planned = plan(board, beats)
         late, cadence = timing(board, timeline)
-        share = drawing_share(timeline)
+        share, spent = pen_busy_share(timeline), pen_time(timeline)
         if share > MAX_DRAWING_SHARE:
-            late.append(f'The pen draws {share:.0%} of the narration (limit {MAX_DRAWING_SHARE:.0%}), so finished pictures barely hold: '
+            late.append(f'The pen is busy {share:.0%} of the narration (limit {MAX_DRAWING_SHARE:.0%}; ' +
+                        ', '.join(f'{key} {value:.0%}' for key, value in spent.items() if value) + '), so finished pictures barely hold: '
                         'give pictures less to draw, draw fewer per page, or let one board accumulate across beats instead of redrawing')
         report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors,
-                  'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'drawing_share': round(share, 3)}}
+                  'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'pen_busy_share': round(share, 3), 'pen_time_share': spent}}
     if report['errors']:
         raise ValueError('Storyboard lint failed:\n- ' + '\n- '.join(report['errors']))
     return report
