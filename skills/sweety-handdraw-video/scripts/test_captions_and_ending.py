@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import copy
 from unittest.mock import patch
-from subtitle_contract import validate_subtitles, validate_subtitle_delivery
+from subtitle_contract import caption_clearance, validate_subtitles, validate_subtitle_delivery
 import unittest
 import wave
 import numpy as np
@@ -71,6 +71,26 @@ class CaptionAndEndingTests(unittest.TestCase):
                 probe.return_value.stdout = '{"streams":[{"index":2}]}'
                 with self.assertRaisesRegex(ValueError, 'another subtitle track'):
                     validate_subtitle_delivery(video)
+
+    def test_artwork_pixels_must_clear_the_subtitle_while_it_shows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caption = build_caption(root, 'subtitle', '学会放过自己。', {}, 1920, 1080)
+            frame = Image.new('RGBA', (600, 300), (40, 40, 40, 255))
+            frame.paste((0, 0, 0, 0), (60, 60, 540, 300))  # open at the bottom: its box overlaps the subtitle, its pixels need not
+            frame.save(root / 'art.png')
+            y = 1080 - caption['height'] - 43
+            left = 960 - 300
+            subtitle = {'asset': 'subtitle', 'caption': True, 'x': (1920 - caption['width']) // 2, 'y': y, 'start': 1., 'end': 3., 'hide': 3.}
+            def timeline(top, start=0.):
+                art = {'asset': 'art', 'caption': False, 'x': left, 'y': top, 'start': start, 'end': start + 1, 'hide': 4., 'image': ['inputs/art.png', None]}
+                return {'canvas': {'height': 1080}, 'assets': {'subtitle': caption, 'art': {'type': 'illustration'}},
+                        'pages': [{'events': [art, subtitle]}]}
+            with self.assertRaisesRegex(ValueError, 'inputs/art.png at 1.0s under "学会放过自己。"'):
+                caption_clearance(timeline(y - 30), root)
+            caption_clearance(timeline(y - 340), root)
+            caption_clearance(timeline(y - 200), root)  # the subtitle sits inside the frame's open bottom
+            caption_clearance(timeline(y - 30, start=3.), root)  # drawn only after the subtitle has gone
 
     def test_caption_cues_reject_text_loss_and_overlapping_times(self):
         beat = {'text': '前句。后句。', 'start': 10., 'duration': 4.,

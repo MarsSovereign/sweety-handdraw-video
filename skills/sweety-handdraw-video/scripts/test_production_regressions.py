@@ -44,7 +44,11 @@ class ProductionRegressions(unittest.TestCase):
                       'audio':{'trim_silence':False},'pages':[{'beats':[{'id':'long','text':'一句很长的话。','audio':'long.wav',
                       'actions':[{'type':'text','text':'标题','x':30,'y':30,'size':40},box]}]}]}
             (root/'job.json').write_text(json.dumps(manifest,ensure_ascii=False))
+            # A previous build numbered the picture first; its layers must not attach to whatever now has its name.
+            (root/'work/assets').mkdir(parents=True);image.save(root/'work/assets/element-0001-line.png')
             timeline=FilmBuilder(root).build()
+            self.assertFalse((root/'work/assets/element-0001-line.png').exists())
+            self.assertNotEqual(timeline['assets']['element-0001']['type'],'illustration')
             page=timeline['pages'][0]
             drawings=[event for event in page['events'] if not event['caption']]
             for event in drawings:

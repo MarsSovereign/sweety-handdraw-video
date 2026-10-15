@@ -177,6 +177,8 @@ class FilmBuilder:
         self.output = self.root / 'outputs'
         for directory in (self.work / 'assets', self.work / 'audio', self.work / 'review', self.output):
             directory.mkdir(parents=True, exist_ok=True)
+        for stale in (self.work / 'assets').glob('element-*'):
+            stale.unlink()  # assets are renumbered every build; a leftover layer file would attach to whatever now has its name
         canvas = self.manifest.get('canvas', {})
         self.width = int(canvas.get('width', 1920))
         self.height = int(canvas.get('height', 1080))
@@ -404,11 +406,16 @@ class FilmBuilder:
         ending_review = validate_ending(self.manifest, master_samples, SAMPLE_RATE) if master_report and not self.manifest.get('runtime_fixture') else None
         narration = np.concatenate(pieces)
         save_wave(self.work / 'narration.wav', narration)
+        # Check cue timing on the clean narration now, not after a render: a late cue costs only a re-alignment here.
+        from align import caption_sync
+        sync = caption_sync(narration, cues)
+        if sync['status'] == 'FAIL' and not self.manifest.get('runtime_fixture'):
+            raise ValueError('Captions start away from the speech; fix the alignment before rendering: ' + json.dumps(sync['outside_tolerance'], ensure_ascii=False))
         hand = self.manifest.get('hand', {})
         timeline = {'title': self.manifest['title'], 'source_notes': self.manifest.get('source_notes', []),
                     'canvas': {'width': self.width, 'height': self.height, 'fps': self.fps},
                     'paper': self.manifest.get('paper', '#FBF9F1'), 'cover_seconds': cover_seconds, 'ending': {'fade_seconds': fade, 'caption_hold_seconds': caption_hold},
-                    'narration_master': master_report,
+                    'narration_master': master_report, 'caption_sync': sync,
                     'captions': {'presentation': 'burned', 'owner': 'caption_events'},
                     'audio_policy': resolve_audio_layers(self.root, self.manifest), 'ending_review': ending_review,
                     'duration': len(narration) / SAMPLE_RATE, 'pages': pages, 'cues': cues, 'audio_report': audio_report,
@@ -417,8 +424,9 @@ class FilmBuilder:
                     'watermark': prepare_watermark(self.manifest.get('watermark'), self.work, self.width, self.height),
                     'art_direction': self.art_direction,
                     'manifest_sha256': hashlib.sha256((self.root / 'job.json').read_bytes()).hexdigest()}
-        from subtitle_contract import validate_subtitles
+        from subtitle_contract import caption_clearance, validate_subtitles
         validate_subtitles(timeline)
+        caption_clearance(timeline, self.work / 'assets')
         timeline['storyboard'] = check_build(self.root, self.manifest, timeline)
         cover = Image.open(resolve_input(self.root, self.manifest['cover']['source'])).convert('RGB')
         if abs(cover.width / cover.height - self.width / self.height) > .025:

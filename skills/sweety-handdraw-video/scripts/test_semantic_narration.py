@@ -99,6 +99,14 @@ class SemanticNarrationTests(unittest.TestCase):
         self.assertEqual(covers('你好世界。', '你好，世界')['status'], 'pass')
         self.assertEqual(covers('你好世界，今天天气很好。', '你好世界')['status'], 'fail')
 
+    def test_asr_compares_numbers_by_value_not_spelling(self):
+        # The script spells numbers out; ASR writes digits. Same value passes, a misread value still fails.
+        script = '这类工具占了百分之四十五，速度快了三点五倍，二零二六年发布。'
+        self.assertEqual(covers(script, '这类工具占了45%,速度快了3.5倍,2026年发布')['status'], 'pass')
+        self.assertEqual(covers(script, '这类工具占了百分之45，速度快了３．５倍，二〇二六年发布')['cer'], 0.)
+        self.assertEqual(covers(script, '这类工具占了54%,速度快了3.5倍,2026年发布')['cer'] > 0, True)
+        self.assertEqual(covers('增长了百分之四十五。', '增长了54%')['status'], 'fail')
+
     def test_whole_master_alignment_from_character_timestamps(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'master.wav'

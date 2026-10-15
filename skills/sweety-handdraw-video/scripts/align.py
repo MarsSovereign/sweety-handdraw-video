@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import unicodedata
 import numpy as np
 
 SAMPLE_RATE = 48000
@@ -42,12 +43,45 @@ print(json.dumps({'words': [{'text': item.text, 'start': item.start_time, 'end':
 '''
 
 
+CHINESE_DIGITS = dict(zip('零〇一二两三四五六七八九', (0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9)))
+CHINESE_UNITS = {'十': 10, '百': 100, '千': 1000, '万': 10 ** 4, '亿': 10 ** 8}
+CHINESE_NUMBER = '[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二三四五六七八九]+)?'
+
+
 def spoken(text):
     return ''.join(character for character in text if character not in PUNCTUATION)
 
 
+def chinese_number(text):
+    """四十五 -> 45, 二零二六 -> 2026, 一亿两千万 -> 120000000, 三点五 -> 3.5."""
+    whole, _, fraction = text.partition('点')
+    if not any(character in CHINESE_UNITS for character in whole):
+        value = ''.join(str(CHINESE_DIGITS[character]) for character in whole)
+    else:
+        total = section = digit = 0
+        for character in whole:
+            if character in CHINESE_DIGITS:
+                digit = CHINESE_DIGITS[character]
+            elif character in '万亿':
+                total += (section + digit) * CHINESE_UNITS[character]
+                section = digit = 0
+            else:
+                section += (digit or 1) * CHINESE_UNITS[character]
+                digit = 0
+        value = str(total + section + digit)
+    return value + ('.' + ''.join(str(CHINESE_DIGITS[character]) for character in fraction) if fraction else '')
+
+
+def numbers(text):
+    """One spelling for numbers on both sides of a comparison: the script says 百分之四十五, ASR writes 45%.
+    Values are kept, so a misread number (四十五 heard as 五十四) still differs."""
+    text = unicodedata.normalize('NFKC', text)
+    text = re.sub('百分之(' + CHINESE_NUMBER + r'|\d+(?:\.\d+)?)', lambda match: chinese_number(match[1]) + '%' if not match[1][0].isdigit() else match[1] + '%', text)
+    return re.sub(CHINESE_NUMBER, lambda match: chinese_number(match[0]), text)
+
+
 def cer(expected, actual):
-    expected, actual = spoken(expected), spoken(actual)
+    expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
     row = np.arange(len(actual) + 1)
     for index, character in enumerate(expected, 1):
         previous, row = row, np.empty_like(row)
@@ -58,8 +92,8 @@ def cer(expected, actual):
 
 
 def covers(expected, actual, max_cer=.15):
-    """ASR must cover the whole text: low CER and matched characters near both ends."""
-    expected, actual = spoken(expected), spoken(actual)
+    """ASR must cover the whole text: low CER and matched characters near both ends (numbers compared by value)."""
+    expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
     blocks = [block for block in SequenceMatcher(None, expected, actual, autojunk=False).get_matching_blocks() if block.size]
     error = cer(expected, actual)
     ok = bool(blocks) and error <= max_cer and blocks[0].a <= 2 and blocks[-1].a + blocks[-1].size >= len(expected) - 2

@@ -26,17 +26,21 @@ def run(arguments):
     elif arguments.command == 'finalize':
         from video_verifier import finalize_job
         finalize_job(arguments.job)
+    elif arguments.command == 'reject':
+        from video_verifier import reject_job
+        reject_job(arguments.job, arguments.reason or '')
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['doctor', 'build', 'render', 'verify', 'finalize'])
+    parser.add_argument('command', choices=['doctor', 'build', 'render', 'verify', 'finalize', 'reject'])
     parser.add_argument('job', type=Path, help='Directory containing job.json')
     parser.add_argument('--preview', action='store_true')
     parser.add_argument('--start', type=float, default=0.)
     parser.add_argument('--duration', type=float)
     parser.add_argument('--assets-only', action='store_true')
+    parser.add_argument('--reason', help='reject: what the user rejected, in their words')
     arguments = parser.parse_args()
     stage = arguments.command
     if stage == 'render' and (arguments.preview or arguments.duration):

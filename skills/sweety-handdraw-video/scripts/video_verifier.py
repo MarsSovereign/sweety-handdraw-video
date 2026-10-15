@@ -5,9 +5,13 @@ import json
 import math
 import re
 import subprocess
+from datetime import datetime
 import numpy as np
 from PIL import Image
 from motion_profile import distance_fraction
+
+REVIEW_CATEGORIES = ('content', 'visual', 'motion', 'audio', 'privacy')
+PLAYBACK_CHECKS = ('continuous_playback', 'listening')
 
 
 def file_hash(path):
@@ -254,12 +258,12 @@ def verify_job(job_directory, assets_only=False):
     report.update(status='engineering_passed_review_required', video_sha256=file_hash(video), cover_sha256=file_hash(output / 'cover.png'),
                   build_fingerprint=render_record['build_fingerprint'], frames=video_stream.get('nb_frames'), bytes=int(metadata['format']['size']))
     report['checks'] = {'full_decode': True, 'complete_timeline': True, 'paths_and_paint_coverage': True,
-                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'audio_gate': report['audio_gate']['status'], 'caption_sync': report['caption_sync']['status'], 'semantic_part_order':True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
+                        'narration_controls_drawing_time': True, 'canvas_bounds': True, 'subtitle_order': True, 'loudness': True, 'audio_gate': report['audio_gate']['status'], 'caption_sync': report['caption_sync']['status'], 'semantic_part_order':True, 'outlines_before_fill': 'not_applicable' if pictures and len(report['pictures']['revealed']) == len(pictures) else True, 'glyph_isolation':True, 'arm_continues_off_canvas':True, 'cover_half_second_still_and_fade':True, 'mandatory_art_direction':True}
     (work / 'verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
     review_path = root / 'review.json'
     if not review_path.exists():
         review = {'video_sha256': report['video_sha256'], **{category: {'status': 'not_checked', 'evidence': ''}
-                    for category in ('content', 'visual', 'motion', 'audio', 'privacy')}, 'limitations': []}
+                    for category in REVIEW_CATEGORIES + PLAYBACK_CHECKS}, 'limitations': []}
         review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2))
     print(json.dumps({key: value for key, value in report.items() if key not in ('assets', 'pages')}, ensure_ascii=False, indent=2))
     return report
@@ -283,6 +287,8 @@ def finalize_job(job_directory):
     review = json.loads((root / 'review.json').read_text())
     video_hash = file_hash(root / 'outputs' / 'film.mp4')
     require(not json.loads((root/'job.json').read_text()).get('runtime_fixture'), 'Runtime fixtures can never be delivered as finished films')
+    rejected = [entry['reason'] for entry in review.get('rejections', []) if entry['video_sha256'] == video_hash]
+    require(not rejected, 'The user rejected this video (' + '; '.join(rejected) + '); rework it and render a new version')
     require(report['status'] == 'engineering_passed_review_required', 'Engineering checks must pass first')
     require(report.get('audio_gate', {}).get('status') == 'PASS' and report.get('caption_sync', {}).get('status') == 'PASS',
             'Film audio gate and caption sync must pass; verify again with this version')
@@ -290,14 +296,40 @@ def finalize_job(job_directory):
     timeline = json.loads((root / 'work' / 'timeline.json').read_text())
     require(timeline['manifest_sha256'] == file_hash(root / 'job.json'), 'Manifest changed since build')
     require(report['build_fingerprint'] == build_fingerprint(root), 'Inputs changed since verification')
-    for category in ('content', 'visual', 'motion', 'audio', 'privacy'):
+    for category in REVIEW_CATEGORIES:
         decision = review.get(category, {})
         require(decision.get('status') == 'pass' and bool(decision.get('evidence', '').strip()), f'{category} review is incomplete or failed')
-    receipt = {'status': 'delivery_review_completed', 'engineering': report, 'review': review}
+    # Watching the whole film in a player and listening to it are their own checks: frames and ASR cannot stand in for
+    # them. Either may stay not_done (no player, no audio output) but then the receipt says so instead of "passed".
+    for check in PLAYBACK_CHECKS:
+        decision = review.get(check, {})
+        require(decision.get('status') in ('pass', 'not_done') and bool(decision.get('evidence', '').strip()),
+                f'{check}: record pass with what you watched/heard, or not_done with why; a failed {check} needs rework')
+    open_checks = [check for check in PLAYBACK_CHECKS if review[check]['status'] == 'not_done']
+    receipt = {'status': 'delivery_review_completed_with_open_checks' if open_checks else 'delivery_review_completed',
+               'open_checks': open_checks, 'engineering': report, 'review': review}
     (root / 'outputs' / 'verification.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
     lines = ['交付检查记录', f"视频 SHA-256：{video_hash}", f"片长：{report['duration_seconds']:.3f}秒", '工程检查：通过']
-    for category in ('content', 'visual', 'motion', 'audio', 'privacy'):
+    for category in REVIEW_CATEGORIES:
         lines.append(f"{category}：{review[category]['evidence']}")
+    for check, label in zip(PLAYBACK_CHECKS, ('连续播放', '听音')):
+        lines.append(f"{label}：{'通过' if review[check]['status'] == 'pass' else '未完成'}，{review[check]['evidence']}")
     lines += ['未验证或限制：'] + (review.get('limitations') or ['未另行记录；不代表任意主题或平台均已验证。'])
     (root / 'outputs' / 'verification.txt').write_text('\n'.join(lines) + '\n')
+    print(str(root / 'outputs' / 'verification.txt'))
+
+
+def reject_job(job_directory, reason):
+    """The user's rejection outranks every recorded pass: it voids the receipt of the video they saw, and finalize
+    refuses that video until a reworked render replaces it."""
+    root = Path(job_directory).resolve()
+    require(bool(reason.strip()), 'Record what the user rejected and why')
+    video_hash = file_hash(root / 'outputs' / 'film.mp4')
+    review_path = root / 'review.json'
+    review = json.loads(review_path.read_text()) if review_path.exists() else {}
+    entry = {'video_sha256': video_hash, 'reason': reason.strip(), 'time': datetime.now().astimezone().isoformat(timespec='seconds')}
+    review.setdefault('rejections', []).append(entry)
+    review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2))
+    (root / 'outputs' / 'verification.json').write_text(json.dumps({'status': 'rejected_by_user', **entry}, ensure_ascii=False, indent=2))
+    (root / 'outputs' / 'verification.txt').write_text(f"交付检查记录\n用户已拒绝，需要返工\n视频 SHA-256：{video_hash}\n原因：{entry['reason']}\n")
     print(str(root / 'outputs' / 'verification.txt'))

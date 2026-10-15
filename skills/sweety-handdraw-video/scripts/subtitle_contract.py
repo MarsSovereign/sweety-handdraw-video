@@ -1,8 +1,10 @@
-"""Reject duplicate caption layers, muxed tracks and automatically loaded sidecars."""
+"""Reject duplicate caption layers, artwork under subtitles, muxed tracks and automatically loaded sidecars."""
 import json
 import math
 from pathlib import Path
 import subprocess
+import numpy as np
+from PIL import Image
 
 
 def validate_subtitles(timeline):
@@ -30,6 +32,37 @@ def validate_subtitles(timeline):
     if any(left[1] > right[0] + 1e-7 for left, right in zip(captions, captions[1:])):
         raise ValueError('Multiple subtitles are visible at the same time')
     return {'owner': 'caption_events', 'cue_count': len(cues), 'maximum_simultaneous_captions': 1}
+
+
+def caption_clearance(timeline, directory):
+    """Artwork visible while a subtitle shows keeps clear of the subtitle's glyphs plus a margin. Checked on the real
+    pixels at layout scale (camera moves aside): staying inside the canvas does not mean staying out of the subtitle."""
+    margin, alpha, intruders = round(timeline['canvas']['height'] * .012), {}, {}
+    def opaque(name):
+        if name not in alpha:
+            alpha[name] = np.array(Image.open(Path(directory) / f'{name}.png').getchannel('A')) > 24
+        return alpha[name]
+    for page in timeline['pages']:
+        captions = [event for event in page['events'] if event['caption']]
+        for event in page['events']:
+            for caption in captions:
+                if event['caption'] or event['start'] >= caption['hide'] or caption['start'] >= event['hide']:
+                    continue
+                glyphs = Image.open(Path(directory) / f"{caption['asset']}.png").getchannel('A').getbbox()
+                if not glyphs:
+                    continue
+                art = opaque(event['asset'])
+                left, top = max(caption['x'] + glyphs[0] - margin, event['x']), max(caption['y'] + glyphs[1] - margin, event['y'])
+                right = min(caption['x'] + glyphs[2] + margin, event['x'] + art.shape[1])
+                bottom = min(caption['y'] + glyphs[3] + margin, event['y'] + art.shape[0])
+                if left < right and top < bottom and art[top - event['y']:bottom - event['y'], left - event['x']:right - event['x']].any():
+                    asset = timeline['assets'][event['asset']]
+                    label = (event.get('image') or [None])[0] or asset.get('text') or event['asset']
+                    intruders.setdefault(label, (round(caption['start'], 2), timeline['assets'][caption['asset']]['text'], caption['y'] + glyphs[1] - margin))
+    if intruders:
+        raise ValueError('Artwork runs under the subtitle; move or shrink it to end above the subtitle band: ' +
+                         '; '.join(f'{label} at {start}s under "{text}" (keep above y={limit})' for label, (start, text, limit) in intruders.items()))
+    return {'margin_px': margin}
 
 
 def validate_subtitle_delivery(video):
