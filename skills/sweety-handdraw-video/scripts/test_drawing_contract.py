@@ -72,7 +72,6 @@ class DrawingContractTests(unittest.TestCase):
         path,parts=self.make_figure()
         metadata=stroke_assets.build_illustration('figure',path,180,260,parts=parts,seconds=6)
         maps=np.load(self.directory/'figure.npz')
-        alpha=np.array(Image.open(self.directory/'figure.png'))[:,:,3]
         reports=metadata['parts']
         self.assertLessEqual(max(part['outline_end'] for part in reports),min(part['fill_start'] for part in reports)+1e-7)
         for part in reports:
@@ -93,7 +92,8 @@ class DrawingContractTests(unittest.TestCase):
         self.assertTrue(any(segment['kind']=='travel' for segment in metadata['segments']))
         drawing=[segment for segment in metadata['segments'] if segment['kind']=='ink']
         self.assertGreater(len(drawing),4)
-        self.assertTrue(all(segment['profile']=='minjerk' for segment in drawing))
+        # Video pace (about 3x real): short strokes keep min-jerk, long ones cruise between eased ends.
+        self.assertTrue(all(segment['profile']=='minjerk' or (segment['profile']=='plateau' and segment['lengths'][-1]>=60) for segment in drawing))
 
     def test_missing_or_incomplete_semantic_parts_stop_build(self):
         path,parts=self.make_figure()

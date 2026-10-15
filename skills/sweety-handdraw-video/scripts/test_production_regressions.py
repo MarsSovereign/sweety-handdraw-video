@@ -32,4 +32,25 @@ class ProductionRegressions(unittest.TestCase):
             self.assertLess(timeline['pages'][0]['beats'][1]['duration'],1)
             self.assertGreater(timeline['pages'][0]['last_drawing_end'],timeline['pages'][0]['beats'][1]['start'])
 
+    def test_pictures_draw_at_video_pace_and_then_hold(self):
+        # A long window must not slow the pen down to fill it: unused time is handed back and the picture holds.
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);Image.new('RGB',(640,360),'white').save(root/'cover.png')
+            write_test_tone(root/'long.wav',9,220)
+            image=Image.new('RGBA',(120,120));ImageDraw.Draw(image).rectangle((10,10,110,110),fill='#F1924A',outline='#252B39',width=4)
+            image.save(root/'box.png')
+            box={'type':'illustration','source':'box.png','x':300,'y':120,'width':120,'height':120,'parts':[{'id':'box','polygon':[[0,0],[1,0],[1,1],[0,1]]}]}
+            manifest={'version':1,'runtime_fixture':True,'title':'画完停住','canvas':{'width':640,'height':360,'fps':24},'cover':{'source':'cover.png','seconds':1},
+                      'audio':{'trim_silence':False},'pages':[{'beats':[{'id':'long','text':'一句很长的话。','audio':'long.wav',
+                      'actions':[{'type':'text','text':'标题','x':30,'y':30,'size':40},box]}]}]}
+            (root/'job.json').write_text(json.dumps(manifest,ensure_ascii=False))
+            timeline=FilmBuilder(root).build()
+            page=timeline['pages'][0]
+            drawings=[event for event in page['events'] if not event['caption']]
+            for event in drawings:
+                asset=timeline['assets'][event['asset']]
+                seconds=asset['seconds'] if asset['type']=='illustration' else asset['handwriting']['seconds']
+                self.assertAlmostEqual(event['end']-event['start'],seconds,places=6)
+            self.assertGreater(page['speech_end']-page['last_drawing_end'],4)
+
 if __name__=='__main__':unittest.main()

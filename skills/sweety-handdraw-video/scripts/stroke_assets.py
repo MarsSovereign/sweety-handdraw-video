@@ -305,6 +305,13 @@ def polygon_owners(parts, artwork, alpha):
         if not mask.any():
             raise ValueError(f'Empty semantic part: {part["id"]}')
         owners[mask] = index
+    # A model's polygon cannot trace the edge and anti-alias halo of a line it cuts through: faint pixels, and any
+    # within a few px of a part, join the nearest part. Solid content farther from every part still has to be declared.
+    stray = (alpha>0)&(owners<0)
+    if stray.any() and (owners>=0).any():
+        distance, nearest = ndimage.distance_transform_edt(owners<0, return_indices=True)
+        edge = stray&((distance<=4)|(alpha<64))
+        owners[edge] = owners[nearest[0], nearest[1]][edge]
     if ((alpha>0)&(owners<0)).any():
         raise ValueError('Semantic parts do not cover every visible pixel; inspect and repair masks')
     return names, owners
@@ -360,7 +367,8 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
     ys, xs = np.nonzero(visible)
     tip = np.array([xs.mean(), ys.min()], dtype=float)
     fill = paint_motion.requirements(regions, rgb, len(names), tip, speed, FPS, shade=False)
-    total = float(seconds) if seconds else float(np.clip(fill['required'], 1, 30))
+    paced = max(fill['minimum'], fill['required'] / line_drawing.VIDEO_LAPSE)
+    total = min(float(seconds), paced) if seconds else float(np.clip(paced, 1, 30))
     segments, fill_parts, _, _, _, counts = paint_motion.schedule(regions, rgb, len(names), tip, total, 0., total, speed, FPS, shade=False)
     first, cover, full, _, _ = paint_motion.render(shape, regions, [], owners_everywhere)
     ending = float(max([segment['end'] for segment in segments] + [full[np.isfinite(full)].max(initial=0.)]))
@@ -426,7 +434,12 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     line_drawing.classify(strokes, owners, alpha, pixels, names, {part['id'] for part in declared if part.get('key')})
     _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
     owners_everywhere = owners[nearest[0], nearest[1]]
-    shade_pixels = paint_motion.inpaint_lines(pixels, ndimage.binary_dilation(clean, iterations=2))
+    # The soft grey edge of a line (anti-aliasing, compression ringing) belongs to the line, not to marker paint:
+    # neutral pixels next to a line are refilled from the nearest real paint (paper on line-only art).
+    neutral = np.ptp(pixels[:, :, :3].astype(int), axis=2) <= 24
+    line_zone = ndimage.binary_dilation(clean, iterations=2) | (ndimage.binary_dilation(clean, iterations=5) & neutral)
+    shade_pixels = paint_motion.inpaint_lines(pixels, line_zone)
+    shade_pixels[:, :, 3] = np.where(shade_pixels[:, :, 3] >= 96, shade_pixels[:, :, 3], 0)
     painted = shade_pixels[:, :, 3] > 0
     shade_rgb = shade_pixels[:, :, :3].astype(float)
     regions = paint_motion.color_regions(shade_rgb, painted, owners_everywhere, len(names), labels)
@@ -436,7 +449,9 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     fill = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS) if regions else {'required': 0., 'moderate': 0., 'minimum': 0.}
     shaded = bool(regions) and bool(paint_motion.shaded_parts(regions, shade_rgb, len(names)))
     ramp = paint_motion.SHADE_RAMP if shaded else 0.
-    total = float(seconds) if seconds else float(np.clip(lines['required'] + fill['required'] + ramp, 1, 30))
+    paced = max(lines['all_at_cap'] + fill['minimum'] + ramp, (lines['required'] + fill['required'] + ramp) / line_drawing.VIDEO_LAPSE)
+    paced += min(1.5, .136 * paced) if drawing.get('sketch') else 0.
+    total = min(float(seconds), paced) if seconds else float(np.clip(paced, 1, 30))
     sketches, segments, cursor = (line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []), [], 0.
     if sketches:
         each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed) * 1.6))) for stroke in sketches]

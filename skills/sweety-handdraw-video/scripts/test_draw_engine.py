@@ -86,7 +86,8 @@ class DrawEngineTests(unittest.TestCase):
         source = self.directory / 'figure.png'
         stroke_assets.build_illustration('figure', source, 240, 300, parts=figure(source), seconds=10)
         outline = stroke_assets.prepare_artwork(source, 240, 300)['outline']
-        report = engine_metrics.measure(self.directory, 'figure', outline=outline, fps=15)
+        # Sample the path at a fixed density (10 s at 15 fps): per-frame thresholds would otherwise vary with the pace.
+        report = engine_metrics.measure(self.directory, 'figure', outline=outline, fps=15, seconds=10)
         self.assertGreater(report['median_length_px'], 60)
         self.assertLess(report['under_15px_length'], .02)
         self.assertEqual(report['cut_by_parts'], 0)

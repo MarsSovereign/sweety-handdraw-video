@@ -13,6 +13,7 @@ SPEED_FACTOR = 4.     # calibrated cap: speed-drawing videos run 4-8x life and s
 FRAME_PX = 80.        # most an inking nib may move in one frame and still read as continuous motion
 TRAVEL_PX = 120.      # peak per-frame move of a lifted pen: a quick flick between strokes, never a teleport
 DETAIL_BOOST = 1.6    # low-priority details may run this much faster than the main strokes under pressure
+VIDEO_LAPSE = 3.      # pictures are drawn at about 3x real pace, then hold; never slowed down to fill a window
 FADE_SECONDS = .3
 REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than draw a line upward or leftward
 KEY_PART = re.compile(r'head|face|eye|mouth|nose|hand|finger|paw', re.I)
@@ -176,8 +177,9 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
     for stroke in strokes:
         stroke['fade'] = stroke['tier'] == TEXTURE
     ordered, _ = order(strokes, part_count, tip)
-    # A hurried hand takes the nearer end more often: soften the direction prior by the expected time-lapse.
-    reverse = REVERSE_COST / float(np.clip(line_seconds(ordered, base, fps) / max(budget, 1e-6), 1, SPEED_FACTOR))
+    # A hurried hand takes the nearer end more often: soften the direction prior only for haste beyond video pace
+    # (a time-lapse of a calm hand keeps its order and directions).
+    reverse = REVERSE_COST / float(np.clip(line_seconds(ordered, base, fps) / VIDEO_LAPSE / max(budget, 1e-6), 1, SPEED_FACTOR))
     ordered, _ = order(strokes, part_count, tip, reverse)
     parts_with_strokes = {stroke['part'] for stroke in strokes}
     # Seconds at this pace, including the soft materialisation of parts left with no drawn stroke.

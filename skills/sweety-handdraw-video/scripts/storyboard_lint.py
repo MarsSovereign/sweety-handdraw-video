@@ -6,6 +6,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from line_drawing import VIDEO_LAPSE
 
 COVER = 1.0  # video time = narration time + the fixed one-second cover
 PICTURES = ('illustration', 'diagram')
@@ -54,6 +55,7 @@ def group_beats(beat_ids, group):
 
 
 STROKES_PER_SECOND = 3.5  # measured draw-v2 pace at the cap: contour strokes, pen lifts and marker color included
+MAX_DRAWING_SHARE = .7    # the pen draws at most this share of the narration; the finished pictures hold the rest
 
 
 def tier(seconds, hold):
@@ -109,7 +111,7 @@ def plan(board, beats):
             seconds = window * weight / sum(weights)
             rows.append({'shot': label, 'type': shot.get('type'), 'visual': visual.get('id'), 'kind': visual.get('kind'), 'subject': visual.get('subject'),
                          'start': round(cursor, 2), 'seconds': round(seconds, 2), 'scene': bool(visual.get('background')),
-                         'complexity': tier(seconds, hold) if visual.get('kind') in PICTURES else 'short text lines'})
+                         'complexity': tier(seconds * MAX_DRAWING_SHARE, hold) if visual.get('kind') in PICTURES else 'short text lines'})
             if seconds < .5:
                 errors.append(f'{label}/{visual.get("id")}: only {seconds:.1f}s to draw; give the shot more beats or fewer visuals')
             cursor += seconds + GAP
@@ -272,14 +274,24 @@ def drawing_time(timeline):
             if not measured:
                 continue
             window, label = event['end'] - event['start'], event.get('visual') or event['asset']
-            if window < measured.get('minimum_seconds', 0):
+            if window < measured.get('minimum_seconds', 0) - .02:  # the reported minimum is rounded to 0.01 s
                 strokes = f' ({measured["stroke_count"]} strokes)' if measured.get('stroke_count') else ''
                 errors.append(f'{label}: {window:.1f}s drawing window but the image needs at least {measured["minimum_seconds"]:.1f}s{strokes}; '
                               'simplify the image or extend its window across beats with a page visual group')
-            elif window < measured.get('required_seconds', 0):
+            elif window < max(measured.get('minimum_seconds', 0), measured.get('required_seconds', 0) / VIDEO_LAPSE) - .05:
                 effect = 'minor strokes will fade in' if measured.get('stroke_count') else 'the brush sweeps faster than a relaxed pace'
-                warnings.append(f'{label}: {window:.1f}s window < {measured["required_seconds"]:.1f}s for full detail; {effect}')
+                warnings.append(f'{label}: {window:.1f}s window is shorter than video pace; {effect}')
     return errors, warnings
+
+
+def drawing_share(timeline):
+    """Share of the narration during which the pen is drawing (overlaps merged)."""
+    spans = sorted((event['start'], event['end']) for page in timeline['pages'] for event in page['events'] if not event['caption'])
+    covered, reach = 0., -math.inf
+    for start, end in spans:
+        covered += max(0., end - max(start, reach))
+        reach = max(reach, end)
+    return covered / max(1e-6, timeline['pages'][-1]['speech_end'] - timeline['pages'][0]['beats'][0]['start'])
 
 
 def check_build(root, manifest, timeline):
@@ -293,8 +305,12 @@ def check_build(root, manifest, timeline):
         beats = [beat for page in timeline['pages'] for beat in page['beats']]
         planned = plan(board, beats)
         late, cadence = timing(board, timeline)
+        share = drawing_share(timeline)
+        if share > MAX_DRAWING_SHARE:
+            late.append(f'The pen draws {share:.0%} of the narration (limit {MAX_DRAWING_SHARE:.0%}), so finished pictures barely hold: '
+                        'give pictures less to draw, draw fewer per page, or let one board accumulate across beats instead of redrawing')
         report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors,
-                  'warnings': warnings, 'stats': {**planned['stats'], **cadence}}
+                  'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'drawing_share': round(share, 3)}}
     if report['errors']:
         raise ValueError('Storyboard lint failed:\n- ' + '\n- '.join(report['errors']))
     return report

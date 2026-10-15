@@ -24,6 +24,7 @@ BUNDLE = PACKAGE / 'assets/hanzi/gb2312-strokes.json.xz'
 SOURCE = 'hanzi-writer-data@2.0.1'
 CDN = 'https://cdn.jsdelivr.net/npm/' + SOURCE + '/{}.json'
 INK_SPEED, MAX_SPEED, TRAVEL_SPEED = 8., 14., 20.  # em per second
+VIDEO_LAPSE = 1.8  # natural pace / video pace
 BOLD = .012  # extra half-width in em
 _bundle = None
 _online = os.environ.get('HANDDRAW_HANZI_FETCH', '1') != '0'
@@ -206,10 +207,10 @@ def schedule(characters, size, seconds, fps):
             items.append(['ink', index, max(2 * frame, .04 + length / INK_SPEED), max(2 * frame, length / MAX_SPEED)])
             previous = points[-1]
     natural, minimum = sum(item[2] for item in items), sum(item[3] for item in items)
-    seconds = float(natural if seconds is None else seconds)
-    if seconds >= natural:
-        durations = [item[2] * min(seconds / natural, 1.35) for item in items]
-    elif seconds >= minimum:
+    # Video pace: a title is written in about half its natural time and then stays; extra window time is handed back.
+    paced = max(minimum, natural / VIDEO_LAPSE)
+    seconds = paced if seconds is None else min(float(seconds), paced)
+    if seconds >= minimum:
         blend = (seconds - minimum) / max(1e-9, natural - minimum)
         durations = [item[3] + blend * (item[2] - item[3]) for item in items]
     else:

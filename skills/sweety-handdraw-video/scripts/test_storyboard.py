@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 from PIL import Image, ImageDraw
 from narration_master import script_text, sha256
-from storyboard_lint import check_build, drawing_time, plan, timing, usage
+from storyboard_lint import MAX_DRAWING_SHARE, check_build, drawing_share, drawing_time, plan, timing, usage
 from video_job import FilmBuilder, save_wave
 import test_style_and_plan as style_tests
 
@@ -42,7 +42,7 @@ class StoryboardPlanTests(unittest.TestCase):
         self.assertTrue(report['warnings'])
 
     def test_varied_plan_passes_and_prints_complexity_tiers(self):
-        timed = beats(12, 12, 12, 12)
+        timed = beats(16, 12, 12, 12)
         shots = [{'beats': ['b0'], 'type': 'scene_with_background', 'visuals': [picture('v0', background='vineyard at dawn')]},
                  {'beats': ['b1'], 'type': 'comparison', 'visuals': [picture('v1'), picture('v2')]},
                  {'beats': ['b2'], 'type': 'process_sequence', 'visuals': [picture('v3'), {'id': 'v4', 'kind': 'diagram', 'subject': 'arrows'}]},
@@ -107,13 +107,22 @@ class StoryboardTimingTests(unittest.TestCase):
         self.assertEqual(timing(scene, timeline)[0], [])
 
     def test_drawing_time_minimum_is_an_error_and_required_is_a_warning(self):
+        # 'required' is real human pace; video pace is a third of it, so 15 s needs 5 s and a 4 s window warns.
         timeline = {'pages': [{'events': [{'asset': 'e', 'caption': False, 'visual': 'v0', 'start': 1, 'end': 5}]}],
-                    'assets': {'e': {'drawability': {'minimum_seconds': 6, 'required_seconds': 9, 'stroke_count': 140}}}}
+                    'assets': {'e': {'drawability': {'minimum_seconds': 6, 'required_seconds': 15, 'stroke_count': 140}}}}
         self.assertIn('simplify the image or extend its window across beats', drawing_time(timeline)[0][0])
         timeline['assets']['e']['drawability']['minimum_seconds'] = 3
         errors, warnings = drawing_time(timeline)
         self.assertEqual(errors, [])
         self.assertIn('minor strokes will fade', warnings[0])
+
+    def test_drawing_share_counts_pen_time_once(self):
+        # The finished pictures must get time to hold: overlapping events count once, captions not at all.
+        page = lambda start, end, events: {'beats': [{'start': start}], 'speech_end': end,
+                                           'events': [{'caption': False, 'start': a, 'end': b} for a, b in events] + [{'caption': True, 'start': start, 'end': end}]}
+        timeline = {'pages': [page(1, 11, [(1.5, 4), (3, 6)]), page(11, 21, [(11.5, 20.5)])]}
+        self.assertAlmostEqual(drawing_share(timeline), (4.5 + 9) / 20)
+        self.assertGreater(drawing_share(timeline), MAX_DRAWING_SHARE - .1)
 
     def test_production_build_requires_a_storyboard(self):
         with self.assertRaisesRegex(ValueError, 'Production requires a storyboard'):

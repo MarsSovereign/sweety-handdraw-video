@@ -50,7 +50,7 @@ def color_regions(rgb, visible, owners, part_count, labels=None):
     for part in range(part_count):
         mask = visible & (owners == part)
         area = int(mask.sum())
-        if not area:
+        if area < 60:  # a few specks are not a region to colour; the line layer carries this part
             continue
         cells = np.argwhere(mask)
         (top, left), (bottom, right) = cells.min(0), cells.max(0) + 1

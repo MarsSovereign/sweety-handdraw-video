@@ -160,6 +160,15 @@ def subtitle_time(seconds):
     return f'{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}'
 
 
+def drawn_seconds(metadata, seconds):
+    """How long an asset actually draws: pictures and stroke-order text stop at video pace, others use their window."""
+    if metadata.get('type') == 'illustration':
+        return float(metadata['seconds'])
+    if metadata.get('handwriting', {}).get('mode') == 'stroke_order':
+        return float(metadata['handwriting']['seconds'])
+    return seconds
+
+
 class FilmBuilder:
     def __init__(self, job_directory):
         self.root, self.manifest = load_manifest(job_directory)
@@ -338,12 +347,14 @@ class FilmBuilder:
                     print(f'WARNING {label}: text needs {sum(floors):.2f}s to show stroke order but only {available:.2f}s exist; '
                           'shorten the text or widen the window', file=sys.stderr)
                     floors = [floor * (available - .15 * len(specs)) / sum(floors) for floor in floors]
-                free = available - sum(floors)
                 weights = [self.action_weight(spec) for spec in specs]
-                for spec, weight, floor, travel in zip(specs, weights, floors, gaps):
-                    # Assets are built after scheduling so the engine knows the real drawing seconds.
-                    seconds = floor + free * weight / sum(weights)
+                for index, (spec, floor, travel) in enumerate(zip(specs, floors, gaps)):
+                    # Each action may take its weighted share of the time still left. Assets are built after scheduling,
+                    # draw at video pace and hand unused time back: later actions may use it, the rest holds the picture.
+                    left = end - start - sum(gaps[index:]) - sum(floors[index:])
+                    seconds = floor + max(0., left) * weights[index] / sum(weights[index:])
                     action = self.create_asset(spec, seconds)
+                    seconds = min(seconds, drawn_seconds(self.assets[action['asset']], seconds))
                     action.update(start=start, end=start + seconds, caption=False, visual=spec.get('visual'))
                     if spec['type'] == 'illustration':
                         action['image'] = [spec['source'], spec.get('crop')]
