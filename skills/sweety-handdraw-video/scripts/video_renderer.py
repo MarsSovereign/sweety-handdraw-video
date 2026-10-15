@@ -17,6 +17,8 @@ ENTER_SECONDS, EXIT_SECONDS = .45, .5
 STAY_SECONDS = 1.  # shorter pen-up gaps keep the hand in frame
 MAX_TILT = 7  # degrees of wrist turn
 SHADOW_OPACITY = .16
+SHADOW_DIRECTION = np.array([.555, .832])  # shadows fall down and to the right (light from the upper left)
+PEN_SHADOW_SLOPE, PEN_SHADOW_OPACITY = .2, .22  # a bare pen's shadow drifts this far per pixel of barrel from the nib
 
 
 def ease(fraction):
@@ -187,12 +189,33 @@ class Renderer:
             cut=(np.c_[xs[border],ys[border]][::6]-self.nib)@turn
             radius=max(2,round(self.height*.006))
             pad=3*radius
-            shadow=Image.new('RGBA',(hand.width+2*pad,hand.height+2*pad),(24,22,20,0))
-            mask=Image.new('L',shadow.size)
-            mask.paste(hand.getchannel('A'),(pad,pad))
-            shadow.putalpha(mask.filter(ImageFilter.GaussianBlur(radius)).point(lambda value:round(value*SHADOW_OPACITY)))
+            if self.timeline.get('hand',{}).get('kind')=='pen':
+                shadow=self.pen_shadow(hand,nib,radius,pad)
+            else:
+                shadow=Image.new('RGBA',(hand.width+2*pad,hand.height+2*pad),(24,22,20,0))
+                mask=Image.new('L',shadow.size)
+                mask.paste(hand.getchannel('A'),(pad,pad))
+                shadow.putalpha(mask.filter(ImageFilter.GaussianBlur(radius)).point(lambda value:round(value*SHADOW_OPACITY)))
             cache[angle]=(hand,shadow,nib,pad,cut)
         return cache[angle]
+
+    def pen_shadow(self,pen,nib,radius,pad):
+        """A held pen touches the paper only at its nib: the shadow starts there and falls further off as the barrel rises."""
+        ys,xs=np.nonzero(np.array(pen.getchannel('A'))>128)
+        axis=np.array([xs.mean(),ys.mean()])-nib
+        axis/=np.linalg.norm(axis)
+        reach=PEN_SHADOW_SLOPE*float(np.max((np.c_[xs,ys]-nib)@axis))
+        extra=np.ceil(reach*SHADOW_DIRECTION).astype(int)
+        mask=Image.new('L',(pen.width+2*pad+int(extra[0]),pen.height+2*pad+int(extra[1])))
+        mask.paste(pen.getchannel('A'),(pad,pad))
+        # Shear about the nib: each point moves along the light by its distance up the barrel (inverse map for PIL).
+        origin=nib+pad
+        inverse=np.linalg.inv(np.eye(2)+PEN_SHADOW_SLOPE*np.outer(SHADOW_DIRECTION,axis))
+        shift=origin-inverse@origin
+        mask=mask.transform(mask.size,Image.Transform.AFFINE,(*inverse[0],shift[0],*inverse[1],shift[1]),Image.Resampling.BILINEAR)
+        shadow=Image.new('RGBA',mask.size,(24,22,20,0))
+        shadow.putalpha(mask.filter(ImageFilter.GaussianBlur(radius)).point(lambda value:round(value*PEN_SHADOW_OPACITY)))
+        return shadow
 
     def hand_angle(self,time,point):
         """Small wrist turn following the smoothed horizontal pen velocity, never exposing the arm's cut edge."""
@@ -221,8 +244,9 @@ class Renderer:
         point,lift,_=state
         hand,shadow,nib,pad,_=self.hand_pose(self.hand_angle(time,point))
         corner=np.rint(point-nib).astype(int)
-        # The shadow stays on the paper while the pen lifts, so it separates slightly from the hand.
-        offset=np.rint(self.height*np.array([.008,.012])+lift*np.array([.5,1.4])).astype(int)
+        # The shadow stays on the paper while the pen lifts, so it separates slightly from the hand; a bare pen's meets its nib.
+        resting=0. if self.timeline.get('hand',{}).get('kind')=='pen' else self.height*np.array([.008,.012])
+        offset=np.rint(resting+lift*np.array([.5,1.4])).astype(int)
         frame.alpha_composite(shadow,tuple(corner-pad+offset))
         frame.alpha_composite(hand,tuple(corner))
 

@@ -58,9 +58,9 @@ python3 scripts/import_voice.py JOB --id my-voice --name "我的声音" --audio 
 
 ## 六款手、仅画笔与广告
 
-`assets/hands/catalog.json` 提供六款手臂与 `pen-only` 完整画笔，全部有美术与隐私记录。手臂按笔尖到手腕距离校准尺度，让最上方落笔时前臂底边仍在画外。`pen-only` 的 `kind:pen` 不执行前臂检查，但笔尖仍须对齐。
+`assets/hands/catalog.json` 提供六款手臂与 `pen-only`，全部有美术与隐私记录。`pen-only` 由 `assets/hands/prompts/pen-only.py` 从 `navy.png` 去掉手指得到：同一支笔、同一握笔角度与笔尖坐标，笔杆广告位置也相同；渲染器给 `kind:pen` 加以笔尖为接触点的投影（笔杆越远离笔尖，影子偏得越远）。手臂按笔尖到手腕距离校准尺度，让最上方落笔时前臂底边仍在画外。`pen-only` 的 `kind:pen` 不执行前臂检查，但笔尖仍须对齐。
 
-`hand.pen_text` 最多16个字符，只在实测笔杆段排版。保留原文、不自动缩写；上限不等于细笔杆上一定可读，长广告优先选宽笔杆或仅画笔。`pen_text_color` 可覆盖预设颜色。自定义手提供 `source/nib/wrist`，广告再提供 `label_segment/label_height`；自定义仅画笔提供 `kind:pen/source/nib/scale`。所有缩放必须为正的有限数。
+`hand.pen_text` 最多16个字符，只在实测笔杆段排版。保留原文、不自动缩写；上限不等于细笔杆上一定可读，须在正常尺寸检查。`pen_text_color` 可覆盖预设颜色。自定义手提供 `source/nib/wrist`，广告再提供 `label_segment/label_height`；自定义仅画笔提供 `kind:pen/source/nib/scale`。所有缩放必须为正的有限数。
 
 ## 图像隐私
 

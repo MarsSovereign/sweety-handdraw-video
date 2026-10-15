@@ -158,22 +158,23 @@
       "kind": "pen",
       "source": "pen-only.png",
       "nib": [
-        96,
-        134
+        94,
+        16
       ],
-      "scale": 0.25,
+      "scale": 0.635,
       "label_segment": [
         [
-          327,
-          366
+          270,
+          191
         ],
         [
-          918,
-          949
+          414,
+          272
         ]
       ],
-      "label_height": 50,
-      "label_color": "#263849"
+      "label_height": 19,
+      "label_color": "#EEE9D7",
+      "derived_from": "navy"
     }
   ]
 }

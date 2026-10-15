@@ -37,7 +37,7 @@ description: 根据主题、文章或讲解稿制作带封面的完整手绘讲�
 
 ## 手部和广告
 
-六款手臂：`navy` 深蓝袖马克笔、`diamond-woman` 碎钻长甲、`child-pencil` 儿童彩铅、`waner-brush` 上官婉儿灵感毛笔、`teacher-pen` 白衬衫中性笔、`cardigan-fountain` 针织袖钢笔；另有 `pen-only` 仅画笔。模型按内容选默认，锚点在 `assets/hands/catalog.json`。手臂按笔尖到手腕校准，裁切边留在画外。
+六款手臂：`navy` 深蓝袖马克笔、`diamond-woman` 碎钻长甲、`child-pencil` 儿童彩铅、`waner-brush` 上官婉儿灵感毛笔、`teacher-pen` 白衬衫中性笔、`cardigan-fountain` 针织袖钢笔；另有 `pen-only`：`navy` 同一支笔去掉手臂（角度、笔尖、尺度不变）。模型按内容选默认，锚点在 `assets/hands/catalog.json`。手臂按笔尖到手腕校准，裁切边留在画外。
 
 `hand.pen_text` 只在笔杆加广告，最多16个字符，默认空，保持用户原文。`watermark.text` 生成低不透明度缓慢浮动的文字水印，默认空，避开字幕。参数见[可选制作设置](references/production-options.md)。
 

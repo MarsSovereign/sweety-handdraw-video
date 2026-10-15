@@ -38,12 +38,11 @@
       ]
     },
     "assets/hands/pen-only.png": {
-      "bytes": 419130,
-      "sha256": "40778ebb877bbf0c5eaa57d18e7a279d3d7837e6b4a604286a7d9c45199e42a3",
+      "bytes": 105991,
+      "sha256": "db8773a6b20f76164e24a3f4f3310c8dfeacf151252229f4a8597561d383faca",
       "urls": [
         "https://cdn.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/hands/pen-only.png",
-        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/hands/pen-only.png",
-        "https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2/assets--hands--pen-only.png"
+        "https://fastly.jsdelivr.net/gh/threerocks/sweety-handdraw-video@v1.3/skills/sweety-handdraw-video/assets/hands/pen-only.png"
       ]
     },
     "assets/hands/teacher-pen.png": {

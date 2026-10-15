@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from PIL import Image, ImageDraw
 from timeline_contract import validate_page_motion
-from video_renderer import Renderer, MAX_TILT
+from video_renderer import Renderer, MAX_TILT, PEN_SHADOW_SLOPE, SHADOW_DIRECTION
 
 
 def renderer(camera=None, transition=None, points=((0., 0.), (200., 0.)), x=100):
@@ -63,6 +63,20 @@ class RenderMotionTests(unittest.TestCase):
         for time, angle in zip(np.arange(1.9, 2.3, 1 / 30), turns):
             cut = leftward.pen_state(time)[0] + leftward.hand_pose(angle)[4]
             self.assertFalse(((cut[:, 0] >= 0) & (cut[:, 0] < 640) & (cut[:, 1] >= 0) & (cut[:, 1] < 360)).any())
+
+    def test_bare_pen_shadow_starts_at_the_nib_and_falls_away_along_the_barrel(self):
+        r = renderer()
+        r.hand = Image.new('RGBA', (120, 260))
+        ImageDraw.Draw(r.hand).line([(8, 9), (100, 240)], fill=(20, 20, 20, 255), width=12)
+        r.timeline['hand'] = {'kind': 'pen'}
+        pen, shadow, nib, pad, _ = r.hand_pose(0)
+        alpha = np.array(shadow)[:, :, 3]
+        self.assertGreater(alpha[round(nib[1]) + pad, round(nib[0]) + pad], 0)  # the pen rests on the paper at its nib
+        ys, xs = np.nonzero(alpha)
+        barrel = float(np.hypot(100 - 8, 240 - 9))
+        reach = np.array([xs.max(), ys.max()]) - (np.array([100, 240]) + pad)
+        np.testing.assert_allclose(reach, PEN_SHADOW_SLOPE * barrel * SHADOW_DIRECTION, atol=3 * pad)
+        self.assertGreater(float(reach @ SHADOW_DIRECTION), .6 * PEN_SHADOW_SLOPE * barrel)
 
     def test_camera_frames_glides_follows_and_stays_on_the_board(self):
         r = renderer(camera=[{'at': 0, 'center': [200, 150], 'zoom': 1.25},

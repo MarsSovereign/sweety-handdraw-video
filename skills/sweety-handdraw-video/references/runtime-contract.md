@@ -138,7 +138,7 @@ python3 /path/to/skill/scripts/drawing_contract.py /path/to/job --thumbnails  # 
 
 ## v1.2 可选制作设置
 
-开始时按[可选制作设置](production-options.md)收集偏好。`hand.preset` 新增 `pen-only`，只显示完整画笔，不套用前臂长度规则。`hand.pen_text` 上限为16个字符。字幕可设 `background:{"color":"#243039","opacity":0.76}` 并配白字；空背景仍可用。上述新约定替代旧示例中的20字符与固定无背景。
+开始时按[可选制作设置](production-options.md)收集偏好。`hand.preset` 新增 `pen-only`：`navy` 同一支笔去掉手臂，阴影从笔尖起，不套用前臂长度规则。`hand.pen_text` 上限为16个字符。字幕可设 `background:{"color":"#243039","opacity":0.76}` 并配白字；空背景仍可用。上述新约定替代旧示例中的20字符与固定无背景。
 
 `watermark:{"text":"用户原文，可换行","opacity":0.24}` 添加低对比、缓慢浮动水印；不配置或空文字不加。默认1080p约27px，可指定 `font/color/font_size`，不透明度上限0.35。固定封面静止阶段不漂移，从1秒正文开始显示，位置始终在画内并避开底部字幕。
 
