@@ -135,13 +135,11 @@ def stroke_statistics(metadata, seconds):
             cosine = -np.dot(endpoint_direction(shapes[i], start_i), endpoint_direction(shapes[j], start_j))
             if math.degrees(math.acos(float(np.clip(cosine, -1, 1)))) <= 35:
                 cut |= {i, j}
-    drawn = metadata.get('drawability', {})
     return {'drawn_strokes': len(strokes), 'median_length_px': round(float(np.median(lengths)), 1),
             'under_15px_count': round(float((lengths < 15).mean()), 3),
             'under_15px_length': round(float(lengths[lengths < 15].sum() / max(1., lengths.sum())), 3),
             'travel_over_nearest': round(travel / max(1., greedy), 2), 'cut_by_parts': round(len(cut) / len(strokes), 3),
-            'speed_mean_px_s': round(float(speeds.mean())), 'speed_cv': round(float(speeds.std() / max(1e-6, speeds.mean())), 3),
-            'faded_fraction': round(drawn.get('faded_stroke_count', 0) / max(1, drawn.get('stroke_count', len(strokes))), 3)}
+            'speed_mean_px_s': round(float(speeds.mean())), 'speed_cv': round(float(speeds.std() / max(1e-6, speeds.mean())), 3)}
 
 
 def metadata_owners(metadata, strokes):

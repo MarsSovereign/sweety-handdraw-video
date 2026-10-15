@@ -12,7 +12,7 @@ import lineart_gate
 import region_marks
 import stroke_assets
 
-DRAWABILITY = {'line_length_px', 'stroke_count', 'drawn_stroke_count', 'faded_stroke_count', 'fill_area_px',
+DRAWABILITY = {'line_length_px', 'stroke_count', 'drawn_stroke_count', 'fill_area_px',
                'required_seconds', 'minimum_seconds', 'lineart_gate'}
 
 
@@ -82,6 +82,25 @@ class DrawEngineTests(unittest.TestCase):
         for part in metadata['parts']:
             self.assertTrue(all(0 <= part[key] <= 1 for key in ('outline_start', 'outline_end', 'fill_start', 'fill_end')))
 
+    def test_finished_picture_keeps_the_source_ink(self):
+        # The pen times the reveal; the pixels are the source's own. Re-stamped tapered strokes broke clean outlines,
+        # and plain Zhang-Suen thinning ate free 45-degree line ends back to their junction, so they were never drawn.
+        large = Image.new('RGB', (560, 640), (251, 249, 241))
+        draw = ImageDraw.Draw(large)
+        draw.rounded_rectangle((60, 60, 500, 300), radius=40, outline='#151515', width=13)
+        draw.line((60, 180, 500, 180), fill='#151515', width=13)
+        draw.polygon([(150, 300), (410, 300), (460, 600), (100, 600)], outline='#151515', width=13)
+        draw.line((150, 520, 230, 440, 280, 490, 350, 400, 420, 520), fill='#151515', width=11, joint='curve')
+        source = self.directory / 'printer-source.png'
+        large.resize((280, 320), Image.Resampling.LANCZOS).save(source)
+        halves = [{'id': 'body', 'polygon': [[0, 0], [1, 0], [1, .5], [0, .5]]}, {'id': 'paper', 'polygon': [[0, .5], [1, .5], [1, 1], [0, 1]]}]
+        stroke_assets.build_illustration('printer', source, 280, 320, parts=halves, seconds=8)
+        expected = np.array(stroke_assets.prepare_artwork(source, 280, 320)['artwork']).astype(int)
+        final = np.array(Image.open(self.directory / 'printer.png')).astype(int)
+        on_paper = lambda pixels: pixels[:, :, :3] * pixels[:, :, 3:] / 255 + 250 * (1 - pixels[:, :, 3:] / 255)
+        wrong = np.abs(on_paper(final) - on_paper(expected)).max(axis=2) > 40
+        self.assertLess(wrong.sum(), .005 * (expected[:, :, 3] > 0).sum())
+
     def test_human_likeness_metrics_on_clean_drawing(self):
         source = self.directory / 'figure.png'
         stroke_assets.build_illustration('figure', source, 240, 300, parts=figure(source), seconds=10)
@@ -100,11 +119,11 @@ class DrawEngineTests(unittest.TestCase):
         self.assertGreater(report['line_edge_f1_240'], .85)
         self.assertLess(report['tip']['outline']['jump_over_60px'], .05)
 
-    def test_texture_line_art_needs_an_exception(self):
+    def test_texture_line_art_must_be_simplified_unless_deliberately_excepted(self):
         source = self.directory / 'texture.png'
         texture(source)
         whole = [{'id': 'disc', 'polygon': [[0, 0], [1, 0], [1, 1], [0, 1]]}]
-        with self.assertRaisesRegex(ValueError, 'lineart_exception'):
+        with self.assertRaisesRegex(ValueError, 'Regenerate or simplify'):
             stroke_assets.build_illustration('texture', source, 300, 300, parts=whole, seconds=6)
         metadata = stroke_assets.build_illustration('texture', source, 300, 300, parts=whole, seconds=6, lineart_exception='deliberate bark texture')
         self.assertFalse(metadata['drawability']['lineart_gate']['passed'])

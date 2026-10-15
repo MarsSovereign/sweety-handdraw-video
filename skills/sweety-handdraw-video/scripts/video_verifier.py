@@ -116,12 +116,11 @@ def verify_assets(root, timeline):
                         require(times.min()>=part[phase+'_start']-1e-6 and times.max()<=part[phase+'_end']+1e-6,
                                 f'{name}: pixels leak into another semantic part interval')
             entry['semantic_parts_in_order']=[part['id'] for part in parts]
-            drawn = np.isfinite(maps['ink']) & (maps['ink_ramp'] == 0)
+            drawn = np.isfinite(maps['ink'])
             if drawn.any():
                 distances, _ = match_reveal_to_tip(metadata, maps['ink'], drawn, {'ink'})
                 require(np.isfinite(distances).all() and distances.max() < 9, f'{name}: ink is too far from the nib')
                 entry['ink_tip_max_distance_px'] = float(distances.max())
-            entry['faded_ink_pixels'] = int((np.isfinite(maps['ink']) & (maps['ink_ramp'] > 0)).sum())
             painted = np.isfinite(maps['color'])
             if painted.any():
                 distances, radii = match_reveal_to_tip(metadata, maps['color'], painted, {'color'})

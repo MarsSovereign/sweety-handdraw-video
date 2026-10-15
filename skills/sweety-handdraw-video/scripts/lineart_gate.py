@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Line-art quality gate: is this outline something a person could draw stroke by stroke?
-Dense junctions, tiny closed holes, specks and short texture marks mean edge-detected texture,
-which can only be faked by fading; regenerate cleaner line art or declare a lineart_exception."""
+Dense junctions, tiny closed holes, specks and short texture marks mean edge-detected texture: hundreds of
+short marks no hand would draw in the window. Regenerate or simplify the line art (lineart_exception only records a
+deliberate texture the pen will still draw mark by mark)."""
 import argparse
 import json
 import numpy as np
@@ -47,9 +48,9 @@ def evaluate(outline, strokes=None, clean=None, skeleton=None):
 
 def failure_message(gate):
     details = ', '.join(f"{key}={gate['metrics'][key]} (limit {gate['thresholds'][key]})" for key in gate['failures'])
+    # The only way out is a drawable picture: switching to reveal or waiving the gate would drop the drawing instead.
     return ('Line art is texture-like and cannot be drawn stroke by stroke: ' + details +
-            '. Regenerate with clean continuous outlines (no hatching/texture edges); for a style without ink outlines set '
-            '"drawing": {"mode": "reveal"} on the job or this action; or set "lineart_exception" to the reason this complex image is deliberate.')
+            '. Regenerate or simplify the image: clean continuous outlines, fewer and longer marks, no hatching, stippling or texture edges.')
 
 
 if __name__ == '__main__':

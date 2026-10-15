@@ -3,6 +3,8 @@ import numpy as np
 
 
 def thin_ink(binary_ink):
+    """Zhang-Suen thinning with the Lü-Wang (1986) bound: a pixel needs 3+ neighbours to go, so a line that thins to a
+    2-pixel diagonal staircase keeps its end instead of being eaten back to its junction (whole 45-degree marks vanished)."""
     skeleton = np.pad(binary_ink.astype(np.uint8), 1)
     while True:
         deleted_count = 0
@@ -14,7 +16,7 @@ def thin_ink(binary_ink):
             neighbor_count = sum(neighbors)
             transition_count = sum((neighbors[index] == 0) & (neighbors[(index + 1) % 8] == 1)
                                    for index in range(8))
-            removable = (center == 1) & (neighbor_count >= 2) & (neighbor_count <= 6) & (transition_count == 1)
+            removable = (center == 1) & (neighbor_count >= 3) & (neighbor_count <= 6) & (transition_count == 1)
             if subiteration == 0:
                 removable &= (neighbors[0] * neighbors[2] * neighbors[4] == 0)
                 removable &= (neighbors[2] * neighbors[4] * neighbors[6] == 0)

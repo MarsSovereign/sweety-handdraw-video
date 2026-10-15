@@ -86,7 +86,7 @@ class DrawingContractTests(unittest.TestCase):
         fill=np.isfinite(maps['color'])
         distances,radii=match_reveal_to_tip(metadata,maps['color'],fill,{'color'})
         self.assertTrue((distances<=radii+.04).all())
-        drawn=np.isfinite(maps['ink'])&(maps['ink_ramp']==0)
+        drawn=np.isfinite(maps['ink'])
         distances,_=match_reveal_to_tip(metadata,maps['ink'],drawn,{'ink'})
         self.assertLess(distances.max(),9)
         self.assertTrue(any(segment['kind']=='travel' for segment in metadata['segments']))

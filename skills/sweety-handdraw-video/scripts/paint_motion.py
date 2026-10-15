@@ -11,7 +11,6 @@ SHADE_RAMP = .3       # seconds over which a broad soft stroke blends flat color
 SCALES = (1., 1.5, 2., 3.)
 FILL_FACTOR = 6.      # coloring cap: a broad marker has no detail to follow, so time-lapsed coloring reads as human at 6x
 FILL_FRAME_PX = 120.  # a broad marker may sweep this far per frame: its own width keeps the swept color continuous
-SMALL_REGION = 1500   # px; in a hurry such specks get no pass of their own and settle in as their part finishes
 
 
 def inpaint_lines(pixels, line_zone):
@@ -141,18 +140,14 @@ def zigzag(region, radius):
             polyline.append(position(along[:, None], offset))
             previous = (b, offset, 1 if b >= a else -1)
         cells.append(np.vstack(polyline))
-    return cells
+    return cells or [np.repeat(center[None], 2, axis=0)]  # a sliver too thin for a row still gets one dab
 
 
 def plan(regions, scale):
-    hurried = scale >= SCALES[-1]
-    largest = {}
-    for region in regions:
-        largest[region['part']] = max(largest.get(region['part'], 0), region['area'])
+    """Every region, however small, gets its own pass of the marker: nothing settles in without a brush."""
     for region in regions:
         region['radius'] = float(np.clip(math.sqrt(region['area']) / 7, 7, 24) * scale * region.get('brush', 1.))
-        small = hurried and region['area'] < SMALL_REGION and region['area'] < largest[region['part']]
-        region['cells'] = [] if small else zigzag(region, region['radius'])
+        region['cells'] = zigzag(region, region['radius'])
 
 
 def shaded_parts(regions, rgb, part_count):
@@ -296,10 +291,6 @@ def render(shape, regions, bands, owners):
                 cover_local[window][passing] = np.maximum(cover_local[window], coverage * grain_local[window])[passing]
                 solid = (coverage >= .85) & ~np.isfinite(full_local[window])
                 full_local[window][solid] = when
-        if not region['passes']:
-            # A speck skipped in a hurry settles in as its part finishes, under the marker's soft edge.
-            first_local[mask], cover_local[mask], full_local[mask] = region['end'], 1., region['end']
-            continue
         missing = mask & ~np.isfinite(first_local)
         if missing.any():
             _, nearest = ndimage.distance_transform_edt(~(np.isfinite(first_local) & mask), return_indices=True)

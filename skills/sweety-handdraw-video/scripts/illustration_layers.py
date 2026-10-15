@@ -20,7 +20,6 @@ def prepare(maps, line, paint, shade, sketch=None):
     line, paint, shade = as_float(line), as_float(paint), as_float(shade)
     layers = {'line_rgb': line[..., :3], 'line_alpha': line[..., 3], 'flat': paint[..., :3], 'shade_rgb': shade[..., :3],
               'alpha': shade[..., 3], 'ink': np.asarray(maps['ink'], np.float32),
-              'ink_ramp': np.maximum(np.asarray(maps['ink_ramp'], np.float32), 1 / SHARP),
               'color': np.asarray(maps['color'], np.float32), 'cover': np.asarray(maps['color_cover'], np.float32),
               'full': np.asarray(maps['color_full'], np.float32), 'shade': np.asarray(maps['shade'], np.float32),
               'shade_ramp': float(maps['shade_ramp'])}
@@ -32,7 +31,7 @@ def prepare(maps, line, paint, shade, sketch=None):
     finite = lambda values: np.where(np.isfinite(values), values, -np.inf)
     times = [layers['ink'], layers['color']] + ([layers['sketch']] if sketch is not None else [])
     layers['start'] = np.minimum.reduce(times)
-    settle = [finite(layers['ink'] + layers['ink_ramp']), finite(layers['full']), finite(layers['shade'] + layers['shade_ramp'])]
+    settle = [finite(layers['ink'] + 1 / SHARP), finite(layers['full']), finite(layers['shade'] + layers['shade_ramp'])]
     if sketch is not None:
         settle.append(np.where(np.isfinite(layers['sketch']), sum(layers['sketch_fade']), -np.inf).astype(np.float32))
     layers['settle'] = np.maximum.reduce(settle)
@@ -59,7 +58,7 @@ def blend(layers, progress, where=Ellipsis):
         start, length = layers['sketch_fade']
         visible = pick('sketch_alpha') * np.clip((progress - pick('sketch')) * SHARP, 0, 1) * (1 - np.clip((progress - start) / length, 0, 1))
         rgb, alpha = over(pick('sketch_rgb'), visible, rgb, alpha)
-    ink = pick('line_alpha') * np.clip((progress - pick('ink')) / pick('ink_ramp'), 0, 1)
+    ink = pick('line_alpha') * np.clip((progress - pick('ink')) * SHARP, 0, 1)
     rgb, alpha = over(pick('line_rgb'), ink, rgb, alpha)
     return np.concatenate([np.rint(np.clip(rgb, 0, 1) * 255), np.rint(np.clip(alpha, 0, 1) * 255)[..., None]], -1).astype(np.uint8)
 

@@ -353,6 +353,22 @@ def region_owners(region_map_path, part_regions, alpha, source_path):
     return names, owners, labels
 
 
+def source_ink(pixels, paint, clean, zone, ink, owner):
+    """The line layer shows the source's own ink, not a re-stamped imitation (stamped discs with tapered ends broke and
+    roughened clean outlines): each line pixel appears when the nib passes its nearest stamped point. Over paint the
+    ink is unmixed from the paint beneath, so line over paint gives back the source pixel."""
+    reach, nearest = ndimage.distance_transform_edt(~np.isfinite(ink), return_indices=True)
+    _, core = ndimage.distance_transform_edt(~clean, return_indices=True)
+    rgb = pixels[:, :, :3].astype(np.float32)
+    ink_rgb, under, painted = rgb[core[0], core[1]], paint[:, :, :3].astype(np.float32), paint[:, :, 3] > 0
+    toward = ink_rgb - under
+    share = np.clip(((rgb - under) * toward).sum(2) / np.maximum((toward ** 2).sum(2), 1.), 0, 1)
+    alpha = np.where(painted, share, pixels[:, :, 3] / 255.) * (zone & (reach <= 4))
+    shown = alpha > 0
+    return (np.where(painted[..., None], ink_rgb, rgb), alpha.astype(np.float32),
+            np.where(shown, ink[nearest[0], nearest[1]], np.inf).astype(np.float32), np.where(shown, owner[nearest[0], nearest[1]], -1).astype(np.int16))
+
+
 def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, ownership):
     """Reveal mode for styles without ink outlines (watercolor, gouache, paper cut, pixel...): part by part the hand
     sweeps a broad soft brush and the finished picture shows only where it has passed. No line layer, no shading pass."""
@@ -378,7 +394,7 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
             segment['start'], segment['end'] = segment['start'] / ending, segment['end'] / ending
         fill_parts = [[value / ending for value in part] for part in fill_parts]
     never = np.full(shape, np.inf, np.float32)
-    maps = {'ink': never, 'ink_ramp': np.zeros(shape, np.float32), 'ink_owner': np.full(shape, -1, np.int16), 'color': first.astype(np.float32),
+    maps = {'ink': never, 'ink_owner': np.full(shape, -1, np.int16), 'color': first.astype(np.float32),
             'color_cover': cover, 'color_full': full.astype(np.float32), 'shade': never, 'shade_ramp': np.float32(1e-3)}
     empty = np.zeros(shape + (4,), np.uint8)
     final = illustration_layers.prepare(maps, empty, pixels, pixels)['final']
@@ -390,7 +406,7 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
     part_reports = [{'id': part_id, 'index': index, 'outline_start': 0., 'outline_end': 0.,
                      'fill_start': fill_parts[index][0], 'fill_end': fill_parts[index][1]} for index, part_id in enumerate(names)]
     segments.sort(key=lambda segment: segment['start'])
-    drawability = {'line_length_px': 0, 'stroke_count': 0, 'drawn_stroke_count': 0, 'faded_stroke_count': 0, 'fill_area_px': int(visible.sum()),
+    drawability = {'line_length_px': 0, 'stroke_count': 0, 'drawn_stroke_count': 0, 'fill_area_px': int(visible.sum()),
                    'required_seconds': round(float(fill['required']), 2), 'minimum_seconds': round(float(fill['minimum']), 2), 'lineart_gate': None}
     metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'mode': 'reveal', 'source': str(source_path), 'width': artwork.width,
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports, 'layers': ['paint'],
@@ -483,7 +499,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     ordered, line_segments, line_parts, line_end, line_counts = line_drawing.schedule(
         strokes, len(names), tip, line_budget, cursor, total, speed, FPS)
     segments += line_segments
-    line_rgb, line_alpha, ink, ink_ramp, ink_owner = line_drawing.render(shape, strokes)
+    line_rgb, line_alpha, ink, ink_owner = source_ink(pixels, shade_pixels, clean, line_zone, *line_drawing.render(shape, strokes)[2:])
     tip = ordered[-1]['points'][-1] if ordered else tip
     fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
     if regions:
@@ -493,19 +509,19 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     first, cover, full, flat, shade = paint_motion.render(shape, regions, bands, owners_everywhere)
     paint_layer = np.dstack([np.rint(flat), shade_pixels[:, :, 3]]).astype(np.uint8)
     line_layer = np.dstack([np.rint(line_rgb), np.rint(line_alpha * 255)]).astype(np.uint8)
-    maps = {'ink': ink, 'ink_ramp': ink_ramp, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
+    maps = {'ink': ink, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
             'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total)}
     sketch_layer = None
     if sketches:
-        sketch_rgb, sketch_alpha, sketch_time, _, _ = line_drawing.render(shape, sketches)
+        sketch_rgb, sketch_alpha, sketch_time, _ = line_drawing.render(shape, sketches)
         sketch_layer = np.dstack([np.rint(sketch_rgb), np.rint(sketch_alpha * 120)]).astype(np.uint8)
         maps.update(sketch=sketch_time, sketch_fade=np.array([line_end, .5 / total], np.float32))
     # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
     finite = lambda values: values[np.isfinite(values)]
-    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + np.maximum(ink_ramp, 1 / illustration_layers.SHARP)).max(initial=0.), finite(full).max(initial=0.),
+    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + 1 / illustration_layers.SHARP).max(initial=0.), finite(full).max(initial=0.),
                         finite(shade).max(initial=0.) + float(maps['shade_ramp'])] + ([float(maps['sketch_fade'].sum())] if sketches else [])))
     if ending > 1:
-        for key in ('ink', 'ink_ramp', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
+        for key in ('ink', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
             if key in maps:
                 maps[key] = (maps[key] / ending).astype(np.float32)
         for segment in segments:
@@ -523,7 +539,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
                      'fill_start': fill_parts[index][0], 'fill_end': fill_parts[index][1]} for index, part_id in enumerate(names)]
     segments.sort(key=lambda segment: segment['start'])
     drawability = {'line_length_px': round(sum(stroke['length'] for stroke in strokes)), 'stroke_count': len(strokes),
-                   'drawn_stroke_count': line_counts['drawn_stroke_count'], 'faded_stroke_count': line_counts['faded_stroke_count'],
+                   'drawn_stroke_count': line_counts['drawn_stroke_count'],
                    'fill_area_px': int(painted.sum()), 'required_seconds': round(lines['required'] + fill['required'] + ramp, 2),
                    'minimum_seconds': round(lines['all_at_cap'] + fill['minimum'] + ramp, 2), 'lineart_gate': gate}
     metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'source': str(source_path), 'width': artwork.width,
