@@ -68,11 +68,11 @@
 - 复杂遮挡可用部位的 `exclude_hsv:[[hue_min,hue_max,saturation_min,value_min]]` 排除透过发丝等空隙可见的背景颜色（色相0—360，饱和度/亮度0—1）。排除的像素必须由后续正确部位接管，需实际看图验证，不能仅以颜色自动推断语义。
 - `weight` 只分配对应音频窗口里的绘制时间，不是秒数。插画和按笔顺手写的文字画到视频节奏（插画约3倍人速，即 `max(minimum_seconds, required_seconds/3)`；文字为自然速度的1/1.8）就停，窗口余下的时间留给观看，下一个动作仍按原窗口起笔。所有元素可设 `z`；底纹默认位于文字下面。
 - 编号区域（可替代多边形）：`python3 scripts/region_marks.py JOB <drawing_plan_id>` 把线稿的闭合区域（大区域内再按颜色细分）编号，写出 `design/regions/<id>.png` 叠图、`.npz` 区域图（绑定源图哈希）和 `.json`。看叠图后在 action 写 `"region_map":"design/regions/<id>.npz","part_regions":[{"id":"head","regions":[3,4,7]},...]`，顺序即绘制顺序、id 与计划 parts 一致。每个编号只能属于一个部位；漏掉的可见区域会报错并列出编号；换图后须重跑。线稿在部位交界处不闭合（叶基通向茎、衣摆通向裤腿）时一个编号会跨两个部位，此时改用 `parts` 多边形。部位可加 `"key": true`，与 id 含 head/face/eye/mouth/hand/paw 的部位一样优先保留真实描线。
-- 线稿门槛：`python3 scripts/lineart_gate.py SOURCE --width W --height H [--crop ...] [--outline-mask ...]` 测交叉点密度、小闭合孔、碎点和短纹理线占比；构建时同样检查。纹理型线稿（如边缘检测出的布纹）无法一笔一笔画，build 报错。优先按[可绘制约定](style-and-drawing.md)重新出图；确属有意的复杂画面才在 action 写 `"lineart_exception":"原因"`。
-- 绘制方式：`"drawing": {"mode": "draw" | "reveal"}` 写在 job 顶层（须与 `style/resolved.json` 的 `drawing_mode` 一致），也可写在单个插画动作里改用 `reveal`。`reveal` 不提取线稿、不过线稿门槛，按部位用斜向软笔刷显出成图，元数据 `mode: "reveal"`，`drawability.minimum_seconds` 很小。见[绘制方式](style-and-drawing.md)。
+- 线稿门槛：`python3 scripts/lineart_gate.py SOURCE --width W --height H [--crop ...] [--outline-mask ...]` 测交叉点密度、小闭合孔、碎点和短纹理线占比；构建时同样检查。纹理型线稿（如边缘检测出的布纹）无法一笔一笔画，build 报错。按[可绘制约定](style-and-drawing.md)简化或重新出图。`lineart_exception` 只记录有意保留的纹理，不是出口：笔仍要一笔一笔画完每条短线，通常会超出窗口。
+- 绘制方式：`"drawing": {"mode": "draw" | "reveal"}` 写在 job 顶层，须与 `style/resolved.json` 的 `drawing_mode` 一致；逐笔绘制的片子里单个插画动作不能改用 `reveal`。揭示只由用户选，见[绘制方式](style-and-drawing.md)。`reveal` 不提取线稿、不过线稿门槛，按部位用斜向软笔刷显出成图，元数据 `mode: "reveal"`，`drawability.minimum_seconds` 很小。见[绘制方式](style-and-drawing.md)。
 - `drawing`：job 顶层或 action 内 `{"speed":1.0,"sketch":false}`，action 覆盖顶层。`speed`（0.25—4）缩放人手基准速度及其上限（描线4倍、上色6倍人速；描线笔尖每帧不超过约80px，上色宽笔每帧不超过约120px）；`sketch:true` 先画淡色构图线，描线后淡出。
-- 插画引擎（draw-v2）：轮廓经清理、骨架化后沿切线连续穿过交叉点成整笔，每笔整体属于一个部位；部位内先外形、再内部结构、后细节，就近衔接并偏向从上到下、从左到右，闭合形从顶部起笔。每笔 min-jerk 速度、转弯处放慢、至少2帧；时间紧时较长的笔改用两端缓起缓收、中段匀速的平台曲线，峰速更低。抬笔基准80—150ms，时间紧时按比例压缩，但至少2帧，空中移动每帧不超过约120px。时间紧时面积小于1500px的小色块不单独涂，随所在部位完成时一起显出。上色按部位、按区域用中位色以连续之字形大笔涂（区域内不抬笔），再用短暂的阴影笔从平涂过渡到原图。资产为 `{name}.png` 终帧加 `-line/-paint/-shade(-sketch).png` 图层和 `.npz` 时间图，逐帧合成，终帧与最后一帧一致。
-- 时长：元数据 `drawability.required_seconds` 是全部按人速画完所需，`minimum_seconds` 是除纹理线外全部线条按上限速度描完、再用最宽笔快速上色所需。窗口低于 `minimum_seconds` 时故事板检查报错；介于两者之间时细节加速、纹理线在所属部位末尾淡入，计数见 `drawn_stroke_count/faded_stroke_count`。`python3 scripts/engine_metrics.py work/assets element-0007` 输出笔画长度、抬笔路径、跳笔、反向、速度变化和“首次可见即终色”等客观指标。
+- 插画引擎（draw-v2）：轮廓经清理、骨架化后沿切线连续穿过交叉点成整笔，每笔整体属于一个部位；部位内先外形、再内部结构、后细节，就近衔接并偏向从上到下、从左到右，闭合形从顶部起笔。每笔 min-jerk 速度、转弯处放慢、至少2帧；时间紧时较长的笔改用两端缓起缓收、中段匀速的平台曲线，峰速更低。抬笔基准80—150ms，时间紧时按比例压缩，但至少2帧，空中移动每帧不超过约120px。再小的色块也有自己的一笔马克笔，不会随部位整体显出。上色按部位、按区域用中位色以连续之字形大笔涂（区域内不抬笔），再用短暂的阴影笔从平涂过渡到原图。笔画只决定每个像素何时出现：线稿图层用原图自己的墨线像素（压在色块上的墨线先从底色中分离出来），每个像素在笔尖经过它最近的一笔时出现，不另画一套带笔压的线，终帧与原图一致；若成图出现断线、毛边，先查引擎，不要先怪原图。资产为 `{name}.png` 终帧加 `-line/-paint/-shade(-sketch).png` 图层和 `.npz` 时间图，逐帧合成，终帧与最后一帧一致。
+- 时长：元数据 `drawability.required_seconds` 是全部按人速画完所需，`minimum_seconds` 是全部线条（含细节和纹理线）按上限速度描完、再用最宽笔快速上色所需。窗口低于 `minimum_seconds` 时故事板检查报错，只能简化画面或延长窗口；介于两者之间时笔加速、顺序改为就近，但每一笔都画出来，没有淡入或整块显现（`drawn_stroke_count` 等于 `stroke_count`）。`python3 scripts/engine_metrics.py work/assets element-0007` 输出笔画长度、抬笔路径、跳笔、反向、速度变化和“首次可见即终色”等客观指标。
 
 汉字按规范笔顺手写：字形与笔画中线来自 Make Me a Hanzi（`assets/hanzi`，Arphic Public License），笔尖沿中线移动，笔画按经过的位置显现，逐笔抬笔，逐字从左到右；字形按所选字体的汉字高度和中心对齐，并略加粗以接近马克笔。包内含 GB2312 全部6763字；其他字首次使用时从 jsDelivr 固定版本下载到素材缓存，离线或无数据不报错。只要一行中有一个汉字缺数据，整行改用字体骨架描线（保持同一观感），资产元数据 `handwriting.mode/reason` 记录原因。拉丁字母、数字和标点沿字体路径，横向笔画从左到右、其余从上到下。每笔至少2帧、限速；`handwriting.natural_seconds/minimum_seconds` 给出自然与最低时长，分到的时间不足时整体压缩并在 build 时提示。笔顺要看得清，标题每字约需0.3—0.6秒，用 `weight` 给足时间。
 
@@ -112,7 +112,7 @@ python3 /path/to/skill/scripts/handdraw_video.py verify /path/to/job
 
 `doctor`中的 `ready` 表示已有任务输入可合成；`voice_studio.available` 单独表示新旁白服务是否可用，二者不能混用。
 
-先实际查看短段再导出整片。verify 完整解码并生成成片抽帧，只代表工程检查。按 [检查与返工](quality-gates.md) 填写检查证据后，才运行 `finalize`。它会拒绝未检查记录、哈希过期和运行测试夹具。
+先实际查看短段再导出整片。verify 完整解码并生成成片抽帧，只代表工程检查。按 [检查与返工](quality-gates.md) 填写检查证据后，才运行 `finalize`。它会拒绝未检查记录、哈希过期、用户已拒绝的视频和运行测试夹具。连续播放、听音没做时回执状态为 `delivery_review_completed_with_open_checks`。用户不接受成片时运行 `reject JOB --reason "…"`。
 
 输出 `film.mp4/cover.png/captions.srt/script.txt/verification.json/verification.txt`。另存中文名时保留原件与哈希。脚本、图片、音频、设计或布局变化均需重渲染和复核。`runtime_fixture:true` 仅供包内离线测试，永远不能生成成片交付回执。
 

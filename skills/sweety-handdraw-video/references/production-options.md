@@ -24,7 +24,7 @@
 }
 ```
 
-示例不是固定默认。画风默认优先从逐笔绘制、上色的 4、5、17、19、20 中按内容选一个编号（纯黑白的 1 号须写 `monochrome_reason`），窗口里会预先显示这个选择；只有内容确实需要无轮廓质感时才默认揭示画风，并写 `reveal_reason`（见[画风文件](style-and-drawing.md)）。画风可选编号 `catalog`、`catalog_auto`、`inferred`、`custom`；完整约定见[画风文件](style-and-drawing.md)。字幕可选 `quiet` 或 `plate`。
+示例不是固定默认。画风默认优先从逐笔绘制、上色的 4、5、17、19、20 中按内容选一个编号（纯黑白的 1 号须写 `monochrome_reason`），窗口里会预先显示这个选择；默认方案不选揭示画风，揭示只由用户亲自选（见[画风文件](style-and-drawing.md)）。画风可选编号 `catalog`、`catalog_auto`、`inferred`、`custom`；完整约定见[画风文件](style-and-drawing.md)。字幕可选 `quiet` 或 `plate`。
 
 用户已经明确的选择放 `options/explicit.json`，键与上述六项一致；这些项跳过等待。用户说“自动选择全部”时把模型拟定的方案记录为委托自动执行（画风的 `confirmation` 为 `user_delegated`），不再强行展示六轮选项。修订已完成影片时沿用已认可选择，除非本次要求改变。
 
