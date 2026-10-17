@@ -12,7 +12,16 @@ def resolve_audio_layers(root, manifest):
     if music not in (None, False):
         if not isinstance(music, dict) or not music.get('user_instruction'):
             raise ValueError('Background music is off by default and needs an explicit user instruction')
-        layers.append({**music, 'kind': 'music', 'start': 0.})
+        layer = {**music, 'kind': 'music', 'start': 0.}
+        if not music.get('prepared'):
+            # The raw source becomes a deterministic bed during build: loop crossfade, fades, sidechain
+            # under the narration and optional dips (music_bed.py). prepared:true keeps a host-made bed.
+            from music_bed import prepare
+            bed, preparation = prepare(root, Path(root) / 'work', layer)
+            layer['source'] = str(bed)
+            layer['preparation'] = {key: preparation[key] for key in
+                                    ('crossfade_seconds', 'fade_in_seconds', 'fade_out_seconds', 'duck', 'dips')}
+        layers.append(layer)
     for effect in options.get('sound_effects', []):
         if not effect.get('reason') or not effect.get('beat_id'):
             raise ValueError('A sound effect needs a narrative reason and the beat it supports')

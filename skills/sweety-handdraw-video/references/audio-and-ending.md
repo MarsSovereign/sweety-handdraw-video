@@ -4,6 +4,8 @@
 
 生产混音默认只有完整旁白，代码不生成背景音乐。旧 music.wav 即使存在也不会使用。audio.music 省略或 false；只有用户本次明确要求并提供 user_instruction 与 source 时可加入。每个 audio.sound_effects 项必须有 source、start、gain、beat_id、reason，说明必要的剧情作用；不能用循环音效变相铺音乐。素材变动会使构建指纹失效。
 
+用户明确要求配乐时，构建自动准备音乐床（`scripts/music_bed.py`）：`source` 给原始音乐文件即可，默认 4 秒交叉续接循环、1.2 秒淡入、3 秒淡出，并用旁白做侧链随语音压低、句间回弹（`duck` 默认开启，可设 false）；特定台词段还要更轻时给 `dips:[[起秒,止秒],…]`（约 0.25 秒斜坡压到约 6%）。`crossfade_seconds`/`fade_in_seconds`/`fade_out_seconds` 可改，全部参数与源文件/音乐床哈希写入 `work/music-preparation.json`。`source` 已是成品音乐床时写 `prepared:true`，构建按现文件使用。换音乐、旁白或时长后必须重新构建并复核混音。
+
 混音报告记录实际输入轨。旁白先经 70 Hz 高通（去隆隆声和直流），再做两遍 loudnorm（I=-20、TP=-2、LRA=7）：第一遍测量，第二遍用测量值以线性增益整体调整，不做动态压缩，时长不变；报告记录测量值和实际模式（`linear`，目标无法线性达到时 ffmpeg 会退回 `dynamic`，须检查）。无附加音轨时处理后直接输出，禁止使用会丢失尾部缓冲的混音链。成片交付必须告知：默认未添加背景音乐；可自行合成，或在发布平台选择配乐。
 
 ## 完整发音和短收尾
