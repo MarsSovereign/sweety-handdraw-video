@@ -4,6 +4,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
+from scipy.spatial import cKDTree
 import hashlib
 import handwriting
 import illustration_layers
@@ -353,20 +354,29 @@ def region_owners(region_map_path, part_regions, alpha, source_path):
     return names, owners, labels
 
 
-def source_ink(pixels, paint, clean, zone, ink, owner):
-    """The line layer shows the source's own ink, not a re-stamped imitation (stamped discs with tapered ends broke and
-    roughened clean outlines): each line pixel appears when the nib passes its nearest stamped point. Over paint the
-    ink is unmixed from the paint beneath, so line over paint gives back the source pixel."""
-    reach, nearest = ndimage.distance_transform_edt(~np.isfinite(ink), return_indices=True)
+def source_ink_layer(pixels, paint, clean, zone):
+    """Unmix source ink from the paint beneath, preserving the original antialiased edge."""
     _, core = ndimage.distance_transform_edt(~clean, return_indices=True)
     rgb = pixels[:, :, :3].astype(np.float32)
     ink_rgb, under, painted = rgb[core[0], core[1]], paint[:, :, :3].astype(np.float32), paint[:, :, 3] > 0
     toward = ink_rgb - under
     share = np.clip(((rgb - under) * toward).sum(2) / np.maximum((toward ** 2).sum(2), 1.), 0, 1)
-    alpha = np.where(painted, share, pixels[:, :, 3] / 255.) * (zone & (reach <= 4))
-    shown = alpha > 0
-    return (np.where(painted[..., None], ink_rgb, rgb), alpha.astype(np.float32),
-            np.where(shown, ink[nearest[0], nearest[1]], np.inf).astype(np.float32), np.where(shown, owner[nearest[0], nearest[1]], -1).astype(np.int16))
+    alpha = np.where(painted, share, pixels[:, :, 3] / 255.) * zone
+    return np.where(painted[..., None], ink_rgb, rgb), (np.rint(alpha * 255) / 255).astype(np.float32)
+
+
+def source_ink(pixels, paint, clean, zone, strokes):
+    """Bind each source pixel to the closest actual nib sample and that stroke's part."""
+    rgb, alpha = source_ink_layer(pixels, paint, clean, zone)
+    ys, xs = np.nonzero(alpha > 0)
+    points = np.vstack([stroke['points'] for stroke in strokes])
+    times = np.concatenate([stroke['times'] for stroke in strokes])
+    parts = np.concatenate([np.full(len(stroke['points']), stroke['part'], np.int16) for stroke in strokes])
+    _, closest = cKDTree(points).query(np.c_[xs, ys])
+    ink_time = np.full(alpha.shape, np.inf, np.float32)
+    ink_owner = np.full(alpha.shape, -1, np.int16)
+    ink_time[ys, xs], ink_owner[ys, xs] = times[closest], parts[closest]
+    return rgb, alpha, ink_time, ink_owner
 
 
 def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, ownership):
@@ -447,7 +457,6 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     gate = lineart_gate.evaluate(outline, strokes, clean, skeleton)
     if not gate['passed'] and not lineart_exception:
         raise ValueError(lineart_gate.failure_message(gate))
-    line_drawing.classify(strokes, owners, alpha, pixels, names, {part['id'] for part in declared if part.get('key')})
     _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
     owners_everywhere = owners[nearest[0], nearest[1]]
     # The soft grey edge of a line (anti-aliasing, compression ringing) belongs to the line, not to marker paint:
@@ -456,6 +465,9 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     line_zone = ndimage.binary_dilation(clean, iterations=2) | (ndimage.binary_dilation(clean, iterations=5) & neutral)
     shade_pixels = paint_motion.inpaint_lines(pixels, line_zone)
     shade_pixels[:, :, 3] = np.where(shade_pixels[:, :, 3] >= 96, shade_pixels[:, :, 3], 0)
+    _, source_line_alpha = source_ink_layer(pixels, shade_pixels, clean, line_zone)
+    topology['edge_visits'] = line_topology.cover_ink_edges(strokes, source_line_alpha > 0, support=line_zone)
+    line_drawing.classify(strokes, owners, alpha, pixels, names, {part['id'] for part in declared if part.get('key')})
     painted = shade_pixels[:, :, 3] > 0
     shade_rgb = shade_pixels[:, :, :3].astype(float)
     regions = paint_motion.color_regions(shade_rgb, painted, owners_everywhere, len(names), labels)
@@ -468,58 +480,73 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     paced = max(lines['all_at_cap'] + fill['minimum'] + ramp, (lines['required'] + fill['required'] + ramp) / line_drawing.VIDEO_LAPSE)
     paced += min(1.5, .136 * paced) if drawing.get('sketch') else 0.
     total = min(float(seconds), paced) if seconds else float(np.clip(paced, 1, 30))
-    sketches, segments, cursor = (line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []), [], 0.
-    if sketches:
-        each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed) * 1.6))) for stroke in sketches]
-        factor = min(1., min(1.5, .12 * total) / (sum(each) + .1 * len(each)))
-        for index, (stroke, length) in enumerate(zip(sketches, each)):
-            length = max(2. / FPS, length * factor)
-            if index:
-                lift = line_drawing.lift_seconds(np.linalg.norm(stroke['points'][0] - sketches[index - 1]['points'][-1]), FPS, factor)
-                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
-                                 'points': [sketches[index - 1]['points'][-1].tolist(), stroke['points'][0].tolist()]})
-                cursor += lift
-            stroke['times'] = (cursor + length * time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')) / total
-            segments.append({'kind': 'sketch', 'start': cursor / total, 'end': (cursor + length) / total, 'profile': 'minjerk',
-                             'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
-            cursor += length
-        tip = sketches[-1]['points'][-1]
-    available = max(.1, total - cursor - ramp)
-    # Water-fill the time: silhouette + key lines, a basic fill, every line at the cap, a moderate fill, then human pace.
-    line_budget, fill_budget, remaining = 0., 0., available
-    steps = [(lines['minimum'], 0.), (0., fill['minimum']), (lines['all_at_cap'] - lines['minimum'], 0.),
-             (0., fill['moderate'] - fill['minimum']), (lines['required'] - lines['all_at_cap'], fill['required'] - fill['moderate'])]
-    for line_step, fill_step in steps:
-        line_step, fill_step = max(0., line_step), max(0., fill_step)
-        share = min(1., remaining / max(1e-9, line_step + fill_step))
-        line_budget, fill_budget, remaining = line_budget + line_step * share, fill_budget + fill_step * share, remaining - (line_step + fill_step) * share
-    if remaining > 1e-6:
-        stretch = min(1.6, available / max(1e-6, line_budget + fill_budget))
-        line_budget, fill_budget = line_budget * stretch, fill_budget * stretch
-    ordered, line_segments, line_parts, line_end, line_counts = line_drawing.schedule(
-        strokes, len(names), tip, line_budget, cursor, total, speed, FPS)
-    segments += line_segments
-    line_rgb, line_alpha, ink, ink_owner = source_ink(pixels, shade_pixels, clean, line_zone, *line_drawing.render(shape, strokes)[2:])
-    tip = ordered[-1]['points'][-1] if ordered else tip
-    fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
-    if regions:
-        fill_segments, fill_parts, bands, _, tip, fill_counts = paint_motion.schedule(
-            regions, shade_rgb, len(names), tip, fill_budget, line_end * total, total, speed, FPS)
-        segments += fill_segments
-    first, cover, full, flat, shade = paint_motion.render(shape, regions, bands, owners_everywhere)
+    sketches = line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []
+    top_tip = np.asarray(tip, float)
+    ceiling = float(seconds) if seconds else 30.
+    # Lay the picture out again when the schedule overruns a window that still has room: the fill minimum
+    # was first measured from the picture top, but the marker actually starts where the lines end, so give
+    # the picture its measured minimum instead of compressing it. A window truly too small still
+    # compresses the whole asset uniformly below.
+    for _ in range(2):
+        tip = top_tip.copy()
+        segments, cursor = [], 0.
+        if sketches:
+            each = [max(2. / FPS, min(.4, stroke['weights'][-1] / (line_drawing.line_cap(speed) * 1.6))) for stroke in sketches]
+            factor = min(1., min(1.5, .12 * total) / (sum(each) + .1 * len(each)))
+            for index, (stroke, length) in enumerate(zip(sketches, each)):
+                length = max(2. / FPS, length * factor)
+                if index:
+                    lift = line_drawing.lift_seconds(np.linalg.norm(stroke['points'][0] - sketches[index - 1]['points'][-1]), FPS, factor)
+                    segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
+                                     'points': [sketches[index - 1]['points'][-1].tolist(), stroke['points'][0].tolist()]})
+                    cursor += lift
+                stroke['times'] = (cursor + length * time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), 'minjerk')) / total
+                segments.append({'kind': 'sketch', 'start': cursor / total, 'end': (cursor + length) / total, 'profile': 'minjerk',
+                                 'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
+                cursor += length
+            tip = sketches[-1]['points'][-1]
+        available = max(.1, total - cursor - ramp)
+        # Water-fill the time: silhouette + key lines, a basic fill, every line at the cap, a moderate fill, then human pace.
+        line_budget, fill_budget, remaining = 0., 0., available
+        steps = [(lines['minimum'], 0.), (0., fill['minimum']), (lines['all_at_cap'] - lines['minimum'], 0.),
+                 (0., fill['moderate'] - fill['minimum']), (lines['required'] - lines['all_at_cap'], fill['required'] - fill['moderate'])]
+        for line_step, fill_step in steps:
+            line_step, fill_step = max(0., line_step), max(0., fill_step)
+            share = min(1., remaining / max(1e-9, line_step + fill_step))
+            line_budget, fill_budget, remaining = line_budget + line_step * share, fill_budget + fill_step * share, remaining - (line_step + fill_step) * share
+        if remaining > 1e-6:
+            stretch = min(1.6, available / max(1e-6, line_budget + fill_budget))
+            line_budget, fill_budget = line_budget * stretch, fill_budget * stretch
+        ordered, line_segments, line_parts, line_end, line_counts = line_drawing.schedule(
+            strokes, len(names), tip, line_budget, cursor, total, speed, FPS)
+        segments += line_segments
+        line_rgb, line_alpha, ink, ink_owner = source_ink(pixels, shade_pixels, clean, line_zone, strokes)
+        tip = ordered[-1]['points'][-1] if ordered else tip
+        # The marker minimum must start where the lines end, not at the picture top: the storyboard gate
+        # reads minimum_seconds, and the fill below begins its travel at this tip.
+        fill_minimum = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS, shade=False)['minimum'] if regions else 0.
+        fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
+        if regions:
+            fill_segments, fill_parts, bands, _, tip, fill_counts = paint_motion.schedule(
+                regions, shade_rgb, len(names), tip, fill_budget, line_end * total, total, speed, FPS)
+            segments += fill_segments
+        first, cover, full, flat, shade = paint_motion.render(shape, regions, bands, owners_everywhere)
+        maps = {'ink': ink, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
+                'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total)}
+        # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
+        finite = lambda values: values[np.isfinite(values)]
+        ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + 1 / illustration_layers.SHARP).max(initial=0.), finite(full).max(initial=0.),
+                            finite(shade).max(initial=0.) + float(maps['shade_ramp'])] + ([line_end + .5 / total] if sketches else [])))
+        if ending <= 1. or total >= ceiling - 1e-9:
+            break
+        total = min(ceiling, total * ending)
     paint_layer = np.dstack([np.rint(flat), shade_pixels[:, :, 3]]).astype(np.uint8)
     line_layer = np.dstack([np.rint(line_rgb), np.rint(line_alpha * 255)]).astype(np.uint8)
-    maps = {'ink': ink, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
-            'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total)}
     sketch_layer = None
     if sketches:
         sketch_rgb, sketch_alpha, sketch_time, _ = line_drawing.render(shape, sketches)
         sketch_layer = np.dstack([np.rint(sketch_rgb), np.rint(sketch_alpha * 120)]).astype(np.uint8)
         maps.update(sketch=sketch_time, sketch_fade=np.array([line_end, .5 / total], np.float32))
-    # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
-    finite = lambda values: values[np.isfinite(values)]
-    ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + 1 / illustration_layers.SHARP).max(initial=0.), finite(full).max(initial=0.),
-                        finite(shade).max(initial=0.) + float(maps['shade_ramp'])] + ([float(maps['sketch_fade'].sum())] if sketches else [])))
     if ending > 1:
         for key in ('ink', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
             if key in maps:
@@ -541,7 +568,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     drawability = {'line_length_px': round(sum(stroke['length'] for stroke in strokes)), 'stroke_count': len(strokes),
                    'drawn_stroke_count': line_counts['drawn_stroke_count'],
                    'fill_area_px': int(painted.sum()), 'required_seconds': round(lines['required'] + fill['required'] + ramp, 2),
-                   'minimum_seconds': round(lines['all_at_cap'] + fill['minimum'] + ramp, 2), 'lineart_gate': gate}
+                   'minimum_seconds': round(lines['all_at_cap'] + fill_minimum + ramp, 2), 'lineart_gate': gate}
     metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'source': str(source_path), 'width': artwork.width,
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports,
                 'layers': ['paint', 'shade'] + (['sketch'] if sketches else []) + ['line'],

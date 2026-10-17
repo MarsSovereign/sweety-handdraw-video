@@ -1,5 +1,6 @@
 """Whole-image line topology: clean the outline once, skeletonize it once, and join pieces through
 junctions by tangent continuity so a stroke follows the line a person would draw in one motion."""
+from collections import deque
 import math
 import numpy as np
 from scipy import ndimage
@@ -191,3 +192,74 @@ def extract_strokes(outline, support=None):
                   'specks_removed_px': int((outline & ~clean).sum()), 'skeleton_px': int(skeleton.sum()),
                   'raw_pieces': len(raw), 'junction_joins': joins, 'micro_absorbed': absorbed}
     return strokes, clean, skeleton, statistics
+
+
+def cover_ink_edges(strokes, visible_ink, maximum=8., support=None):
+    """Visit broad source corners before timing; never stretch a timestamp away from the nib.
+
+    Short excursions stay inside the source line zone and return to the same contour. Their
+    added length is included in ordinary speed/budget checks. Curved edges follow their connected ink zone instead of crossing paper.
+    """
+    ys, xs = np.nonzero(visible_ink)
+    candidates = np.c_[xs, ys]
+    visits = 0
+    support = visible_ink if support is None else support
+    if not len(candidates) or not strokes:
+        return visits
+    while True:
+        counts = np.array([len(stroke['points']) for stroke in strokes])
+        points = np.vstack([stroke['points'] for stroke in strokes])
+        distances, nearest = cKDTree(points).query(candidates)
+        worst = int(distances.argmax())
+        if distances[worst] < maximum:
+            return visits
+        stroke_index = int(np.searchsorted(np.cumsum(counts), nearest[worst], side='right'))
+        point_index = int(nearest[worst] - counts[:stroke_index].sum())
+        stroke = strokes[stroke_index]
+        origin, target = stroke['points'][point_index], candidates[worst]
+        outward = np.linspace(origin, target, max(3, int(math.ceil(distances[worst])) + 1))
+        cells = np.rint(outward).astype(int)
+        if not support[cells[:, 1], cells[:, 0]].all():
+            # A curved contour can make the nearest straight shortcut cross paper. Walk
+            # inside the existing ink zone back to a contour sample instead.
+            anchors = {tuple(cell[::-1]): index for index, cell in enumerate(np.rint(points).astype(int))}
+            start = tuple(target[::-1])
+            parents, queue, end = {start: None}, deque([start]), None
+            while queue:
+                cell = queue.popleft()
+                if cell in anchors:
+                    end = cell
+                    break
+                for dy, dx in STEPS:
+                    next_cell = cell[0] + dy, cell[1] + dx
+                    y, x = next_cell
+                    if 0 <= y < support.shape[0] and 0 <= x < support.shape[1] and support[y, x] and next_cell not in parents:
+                        parents[next_cell] = cell
+                        queue.append(next_cell)
+            if end is None:
+                # An isolated source mark needs its own stroke and pen lift, never a
+                # connector to another component or a remote pixel's timestamp.
+                component = np.zeros_like(visible_ink)
+                for y, x in parents:
+                    component[y, x] = visible_ink[y, x]
+                details, _, _, _ = extract_strokes(component)
+                if not details:
+                    raise ValueError('Visible ink has no drawable contour; repair the outline')
+                strokes.extend(details)
+                visits += len(details)
+                continue
+            anchor = anchors[end]
+            stroke_index = int(np.searchsorted(np.cumsum(counts), anchor, side='right'))
+            point_index = int(anchor - counts[:stroke_index].sum())
+            stroke = strokes[stroke_index]
+            path = [stroke['points'][point_index]]
+            while end is not None:
+                path.append(np.array(end[::-1], float))
+                end = parents[end]
+            outward = np.array(path)
+            outward = outward[np.r_[True, np.linalg.norm(np.diff(outward, axis=0), axis=1) > 1e-8]]
+        excursion = np.vstack([outward[1:], outward[-2::-1]])
+        stroke['points'] = np.vstack([stroke['points'][:point_index + 1], excursion, stroke['points'][point_index + 1:]])
+        stroke['radius'] = np.r_[stroke['radius'][:point_index + 1], np.full(len(excursion), .6), stroke['radius'][point_index + 1:]]
+        stroke['length'] = float(calculate_lengths(stroke['points'])[-1])
+        visits += 1
