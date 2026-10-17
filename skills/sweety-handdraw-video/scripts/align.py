@@ -5,6 +5,7 @@ Caption cues come from character timestamps when available (forced aligner, ASR,
 subtitles), otherwise from a deterministic pause split: N pieces use the N-1 most prominent pauses.
 """
 import argparse
+from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 import hashlib
 import json
@@ -45,39 +46,54 @@ print(json.dumps({'words': [{'text': item.text, 'start': item.start_time, 'end':
 
 CHINESE_DIGITS = dict(zip('零〇一二两三四五六七八九', (0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9)))
 CHINESE_UNITS = {'十': 10, '百': 100, '千': 1000, '万': 10 ** 4, '亿': 10 ** 8}
-CHINESE_NUMBER = '[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二三四五六七八九]+)?'
+NUMBER_DIGITS = '0-9零〇一二两三四五六七八九'
+NUMBER_PATTERN = '[' + NUMBER_DIGITS + '十百千万亿]+(?:[.点][' + NUMBER_DIGITS + '十百千万亿]+)*'
 
 
 def spoken(text):
-    return ''.join(character for character in text if character not in PUNCTUATION)
+    # A decimal point carries a value; sentence punctuation does not.
+    return ''.join(character for index, character in enumerate(text)
+                   if character not in PUNCTUATION or (character == '.' and 0 < index < len(text) - 1
+                       and text[index - 1].isdigit() and text[index + 1].isdigit()))
 
 
 def chinese_number(text):
-    """四十五 -> 45, 二零二六 -> 2026, 一亿两千万 -> 120000000, 三点五 -> 3.5."""
-    whole, _, fraction = text.partition('点')
-    if not any(character in CHINESE_UNITS for character in whole):
-        value = ''.join(str(CHINESE_DIGITS[character]) for character in whole)
-    else:
-        total = section = digit = 0
-        for character in whole:
-            if character in CHINESE_DIGITS:
-                digit = CHINESE_DIGITS[character]
-            elif character in '万亿':
-                total += (section + digit) * CHINESE_UNITS[character]
-                section = digit = 0
-            else:
-                section += (digit or 1) * CHINESE_UNITS[character]
-                digit = 0
-        value = str(total + section + digit)
-    return value + ('.' + ''.join(str(CHINESE_DIGITS[character]) for character in fraction) if fraction else '')
+    """Parse exact Chinese/Arabic magnitude notation without float rounding or range guessing."""
+    normalized = ''.join(str(CHINESE_DIGITS.get(character, character)) for character in text).replace('点', '.')
+    # Adjacent spoken nonzero digits can be an approximation (两三万, 四五十), not 23/45.
+    if re.search('[一二两三四五六七八九]{2}', text) and len(text) < 4:
+        return text
+
+    def value(token):
+        for unit in ('亿', '万'):
+            if unit in token:
+                if token.count(unit) != 1:
+                    raise ValueError('Repeated magnitude')
+                left, right = token.split(unit)
+                return value(left or '1') * CHINESE_UNITS[unit] + (value(right) if right else 0)
+        total, previous, cursor = Decimal(0), 10000, 0
+        for match in re.finditer(r'([0-9]+(?:\.[0-9]+)?)?([十百千])', token):
+            if match.start() != cursor or CHINESE_UNITS[match[2]] >= previous:
+                raise ValueError('Invalid small-unit order')
+            previous = CHINESE_UNITS[match[2]]
+            total += Decimal(match[1] or '1') * previous
+            cursor = match.end()
+        return total + (Decimal(token[cursor:]) if token[cursor:] else 0)
+
+    try:
+        result = format(value(normalized), 'f')
+        return result.rstrip('0').rstrip('.') if '.' in result else result
+    except (InvalidOperation, ValueError):
+        return text
 
 
 def numbers(text):
-    """One spelling for numbers on both sides of a comparison: the script says 百分之四十五, ASR writes 45%.
-    Values are kept, so a misread number (四十五 heard as 五十四) still differs."""
+    """Normalize comparison text only; retain different magnitudes, fractions and signs."""
     text = unicodedata.normalize('NFKC', text)
-    text = re.sub('百分之(' + CHINESE_NUMBER + r'|\d+(?:\.\d+)?)', lambda match: chinese_number(match[1]) + '%' if not match[1][0].isdigit() else match[1] + '%', text)
-    return re.sub(CHINESE_NUMBER, lambda match: chinese_number(match[0]), text)
+    text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
+    text = re.sub('百分之(' + NUMBER_PATTERN + ')', lambda match: chinese_number(match[1]) + '%', text)
+    text = re.sub(NUMBER_PATTERN, lambda match: chinese_number(match[0]), text)
+    return re.sub(r'-(?=\d)', '负', text)
 
 
 def cer(expected, actual):
@@ -93,11 +109,12 @@ def cer(expected, actual):
 
 def covers(expected, actual, max_cer=.15):
     """ASR must cover the whole text: low CER and matched characters near both ends (numbers compared by value)."""
+    raw_actual = actual
     expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
     blocks = [block for block in SequenceMatcher(None, expected, actual, autojunk=False).get_matching_blocks() if block.size]
     error = cer(expected, actual)
     ok = bool(blocks) and error <= max_cer and blocks[0].a <= 2 and blocks[-1].a + blocks[-1].size >= len(expected) - 2
-    return {'cer': round(error, 3), 'status': 'pass' if ok else 'fail', 'asr_text': actual}
+    return {'cer': round(error, 3), 'status': 'pass' if ok else 'fail', 'asr_text': raw_actual, 'comparison_text': actual}
 
 
 def char_times(text, words):
