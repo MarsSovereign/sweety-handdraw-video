@@ -441,13 +441,15 @@ def mix_audio(root,timeline):
     else:
         from narration_master import sha256
         command=['ffmpeg','-y','-v','error','-i',str(normalized_path)]
-        filters=[]
+        # Keep the same full-level dual-mono narration with or without effects.
+        # Implicit mono-to-stereo negotiation otherwise attenuates it by 3 dB.
+        filters=['[0:a]pan=stereo|c0=c0|c1=c0[narration]']
         for index, layer in enumerate(layers, 1):
             if sha256(layer['source']) != layer['sha256']:
                 raise ValueError('Audio layer changed after build')
             command.extend(['-i',layer['source']])
-            filters.append(f"[{index}:a]volume={layer['gain']},adelay={round(layer['start']*1000)}:all=1[layer{index}]")
-        inputs='[0:a]'+''.join(f'[layer{index}]' for index in range(1,len(layers)+1))
+            filters.append(f"[{index}:a]aformat=channel_layouts=stereo,volume={layer['gain']},adelay={round(layer['start']*1000)}:all=1[layer{index}]")
+        inputs='[narration]'+''.join(f'[layer{index}]' for index in range(1,len(layers)+1))
         filters.append(inputs+f'amix=inputs={len(layers)+1}:duration=first:normalize=0,alimiter=limit=0.89:level=false:latency=true[out]')
         command.extend(['-filter_complex',';'.join(filters),'-map','[out]','-ar',str(rate),'-ac','2',str(root/'mix.wav')])
         subprocess.run(command,check=True)
