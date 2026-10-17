@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import statistics
 import sys
 from pathlib import Path
 from line_drawing import VIDEO_LAPSE
@@ -262,7 +263,20 @@ def timing(board, timeline):
                 source, crop = json.loads(current)
                 errors.append(f'{source}{" crop " + str(crop) if crop else ""} stays the main visual for more than 2 consecutive beats (through {beat["id"]}, shot {shot.get("id")}); '
                               'start a new illustration or mark the shot "callback" with a reason')
-    return errors, {'longest_static_seconds': round(stretch[0], 2), 'longest_static_range': [round(stretch[1], 2), round(stretch[2], 2)]}
+    holds = []
+    for page in timeline['pages']:
+        primary = sorted((event for event in page['events'] if not event['caption']), key=lambda event: event['start'])
+        for index, event in enumerate(primary):
+            if event.get('image'):
+                following = primary[index + 1]['start'] if index + 1 < len(primary) else page.get('end', event['end'])
+                holds.append(max(0., following - event['end']))
+    stats = {'longest_static_seconds': round(stretch[0], 2), 'longest_static_range': [round(stretch[1], 2), round(stretch[2], 2)]}
+    if holds:
+        # How long a finished picture stays readable before the next element: the first Codex film held
+        # only 0.56s on average, validated films hold 1.1-1.7s. Warn when the pen leaves too little time.
+        stats['finished_hold_median_seconds'] = round(statistics.median(holds), 2)
+        stats['finished_hold_min_seconds'] = round(min(holds), 2)
+    return errors, stats
 
 
 def drawing_time(timeline):
@@ -335,6 +349,10 @@ def check_build(root, manifest, timeline):
             late.append(f'The pen is busy {share:.0%} of the narration (limit {MAX_DRAWING_SHARE:.0%}; ' +
                         ', '.join(f'{key} {value:.0%}' for key, value in spent.items() if value) + '), so finished pictures barely hold: '
                         'give pictures less to draw, draw fewer per page, or let one board accumulate across beats instead of redrawing')
+        median_hold = cadence.get('finished_hold_median_seconds')
+        if median_hold is not None and median_hold < 1.:
+            warnings = warnings + [f'A finished picture holds only {median_hold:.2f}s before the next element (median; validated films hold about 1.1-1.7s): '
+                                   'give pictures less to draw or let one board accumulate across beats instead of redrawing']
         report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors,
                   'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'pen_busy_share': round(share, 3), 'pen_time_share': spent}}
     if report['errors']:

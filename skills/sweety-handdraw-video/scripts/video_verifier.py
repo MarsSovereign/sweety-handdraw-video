@@ -60,6 +60,18 @@ def build_fingerprint(root):
     return digest.hexdigest()
 
 
+def engine_identity():
+    """Version and a short digest of the scripts for the verification record: two hosts can compare
+    these to tell which skill build produced a job without shipping whole directories around."""
+    scripts = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(scripts.glob('*.py')):
+        digest.update(file_hash(path).encode())
+    stamp = scripts.parent / 'VERSION'
+    return {'version': stamp.read_text().strip() if stamp.is_file() else 'unknown',
+            'scripts_sha256': digest.hexdigest()[:16]}
+
+
 def match_reveal_to_tip(metadata, reveal, mask, kinds):
     ys, xs = np.where(mask)
     timestamps = reveal[ys, xs].astype(float)
@@ -171,7 +183,7 @@ def verify_job(job_directory, assets_only=False):
     timeline = json.loads((work / 'timeline.json').read_text())
     from art_direction import verify_art_direction
     art_review=verify_art_direction(root,json.loads((root/'job.json').read_text()))
-    report = {'duration_seconds': timeline['duration'], 'art_direction':art_review,'checks': {}, 'assets': verify_assets(root, timeline), 'pages': []}
+    report = {'duration_seconds': timeline['duration'], 'engine': engine_identity(), 'art_direction':art_review,'checks': {}, 'assets': verify_assets(root, timeline), 'pages': []}
     pictures = [entry for entry in report['assets'] if entry['type'] == 'illustration']
     report['pictures'] = {'drawn': sum(entry['mode'] == 'draw' for entry in pictures),
                           'revealed': [entry['name'] for entry in pictures if entry['mode'] == 'reveal']}
