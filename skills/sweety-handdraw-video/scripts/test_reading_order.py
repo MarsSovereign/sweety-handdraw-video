@@ -21,6 +21,14 @@ class ReadingOrderTests(unittest.TestCase):
         arranged, _ = order(strokes, 1, np.array([0, 0]))
         self.assertEqual([entry['index'] for entry in arranged], [2, 1, 0])
 
+    def test_marker_keeps_the_planned_top_first_sweep_even_when_tip_is_lower(self):
+        from paint_motion import timeline
+        region = {'part': 0, 'radius': 7, 'cells': [np.array([[10, 10], [80, 10]]), np.array([[10, 100], [80, 100]])]}
+        segments = timeline([region], [], 1, np.array([80, 100]), pace=100)[0]
+        sweeps = [segment for segment in segments if segment['kind'] == 'color']
+        self.assertEqual(sweeps[0]['points'][0], [10, 10])
+        self.assertEqual(sweeps[1]['points'][0], [10, 100])
+
 
 if __name__ == '__main__':
     unittest.main()

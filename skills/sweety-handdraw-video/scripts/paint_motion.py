@@ -178,12 +178,8 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
     for part in range(part_count):
         part_start = cursor
         for region in [region for region in regions if region['part'] == part]:
-            cells, passes = list(region['cells']), []
-            while cells:
-                cell = min(cells, key=lambda c: min(np.linalg.norm(c[0] - tip), np.linalg.norm(c[-1] - tip)))
-                cells = [c for c in cells if c is not cell]
-                if np.linalg.norm(cell[-1] - tip) < np.linalg.norm(cell[0] - tip):
-                    cell = cell[::-1]
+            passes = []
+            for cell in region['cells']:
                 travel(cell[0])
                 weights = weighted_lengths(cell)
                 seconds = max(2. / fps, weights[-1] / pace)
