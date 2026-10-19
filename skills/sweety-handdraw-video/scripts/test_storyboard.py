@@ -265,5 +265,42 @@ class RecognizabilityTests(unittest.TestCase):
         self.assertTrue(Path(thumbnails(root)['sheet']).is_file())
 
 
+
+class PresentationDensityTests(unittest.TestCase):
+    def test_picture_book_rejects_multi_hero_shots(self):
+        timed = beats(8, 8)
+        board_doc = board([
+            {'beats': ['b0'], 'type': 'comparison', 'visuals': [picture('v0'), picture('v1')]},
+            {'beats': ['b1'], 'type': 'closeup', 'visuals': [picture('v2')]},
+        ], presentation={'mode': 'picture_book', 'reason': '儿童绘本，一页一图'})
+        errors = '\n'.join(plan(board_doc, timed)['errors'])
+        self.assertIn('picture_book', errors)
+        self.assertIn('at most 1', errors)
+
+    def test_accumulating_board_allows_longer_hold_and_fewer_visuals(self):
+        timed = beats(20, 20, 20)
+        # 60s narration; accumulating_board cadence_factor 0.55, hold 12 → required ~ ceil(60/12*0.55)=3
+        shots = [
+            {'beats': ['b0'], 'type': 'scene_with_background', 'board': 'main',
+             'visuals': [picture('v0', background='chalkboard frame'), {'id': 't0', 'kind': 'text_group', 'subject': 'title'}]},
+            {'beats': ['b1'], 'type': 'process_sequence', 'board': 'main',
+             'visuals': [picture('v1'), {'id': 't1', 'kind': 'text_group', 'subject': 'step'}]},
+            {'beats': ['b2'], 'type': 'key_points', 'board': 'main',
+             'visuals': [picture('v2'), {'id': 't2', 'kind': 'text_group', 'subject': 'recap'}]},
+        ]
+        report = plan(board(shots, presentation={'mode': 'accumulating_board', 'reason': '课堂板书累积'}, max_hold_seconds=12), timed)
+        self.assertEqual(report['stats']['presentation_mode'], 'accumulating_board')
+        self.assertLessEqual(report['stats']['required_visuals'], 4)
+        self.assertEqual(report['errors'], [])
+
+    def test_dense_infographic_allows_multi_module_shot(self):
+        timed = beats(12)
+        shots = [{'beats': ['b0'], 'type': 'overview_recap',
+                  'visuals': [picture('v0'), picture('v1'), picture('v2'), {'id': 't0', 'kind': 'text_group', 'subject': 'title'}]}]
+        report = plan(board(shots, presentation={'mode': 'dense_infographic', 'reason': '成人科普信息图'}), timed)
+        self.assertEqual(report['stats']['presentation_density'], 'dense')
+        self.assertEqual(report['errors'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

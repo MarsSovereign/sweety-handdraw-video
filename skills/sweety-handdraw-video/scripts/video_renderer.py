@@ -49,7 +49,7 @@ def asset_tip(metadata,progress,starts=None):
         fraction=(progress-segment['end'])/max(1e-7,following['start']-segment['end'])
         return lifted_move(points[-1],np.array(following['points'][0],dtype=float),fraction)
     fraction=(progress-segment['start'])/max(1e-7,segment['end']-segment['start'])
-    if segment['kind']=='travel':
+    if segment['kind'] in ('travel', 'pause'):
         return lifted_move(points[0],points[-1],fraction)
     distances=np.array(segment['lengths'])
     target=distance_fraction(fraction,segment.get('profile','linear'))*distances[-1]

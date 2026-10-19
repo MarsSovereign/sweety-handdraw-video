@@ -15,6 +15,7 @@ FRAME_PX = 80.        # most an inking nib may move in one frame and still read 
 TRAVEL_PX = 120.      # peak per-frame move of a lifted pen: a quick flick between strokes, never a teleport
 DETAIL_BOOST = 1.6    # details and short marks may run this much faster than the main strokes under pressure
 VIDEO_LAPSE = 3.      # pictures are drawn at about 3x real pace, then hold; never slowed down to fill a window
+PART_PAUSE = .18     # thinking pause between semantic parts at human pace (scaled by lapse)
 REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than draw a line upward or leftward
 HURRIED = REVERSE_COST / SPEED_FACTOR  # a hand at the speed cap cares less about direction
 KEY_PART = re.compile(r'head|face|eye|mouth|nose|hand|finger|paw', re.I)
@@ -147,14 +148,16 @@ def duration(stroke, speed, fps, lapse=1.):
     return max(2. / fps, stroke['weights'][-1] / min(speed, FRAME_PX * fps / PEAK[profile])), profile
 
 
-def line_seconds(ordered, speed, fps, detail_speed=None, lapse=1.):
-    total, previous = 0., None
+def line_seconds(ordered, speed, fps, detail_speed=None, lapse=1., part_count=None):
+    total, previous, last_part = 0., None, None
     for stroke in ordered:
         rate = detail_speed if detail_speed and stroke['tier'] >= DETAIL else speed
         total += duration(stroke, rate, fps, lapse)[0]
         if previous is not None:
             total += lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1, lapse)
-        previous = stroke['points'][-1]
+        if last_part is not None and stroke['part'] != last_part:
+            total += PART_PAUSE / max(lapse, 1e-6)
+        previous, last_part = stroke['points'][-1], stroke['part']
     return total
 
 
@@ -215,9 +218,16 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
             cursor += seconds
             previous = stroke['points'][-1]
         parts.append([part_start / total, cursor / total])
+        # Humans pause briefly when switching semantic parts (not between strokes of the same part).
+        if mine and part + 1 < part_count and any(s['part'] == part + 1 for s in ordered):
+            pause = PART_PAUSE / max(lapse, 1e-6)
+            segments.append({'kind': 'pause', 'start': cursor / total, 'end': (cursor + pause) / total,
+                             'points': [previous.tolist(), previous.tolist()] if previous is not None else None})
+            cursor += pause
     end = cursor / total
     counts = {'drawn_stroke_count': len(ordered), 'line_speed_px_s': round(speed_used, 1), 'speed_over_cap': bool(speed_used > cap * 1.001),
-              'drawn_fast_count': sum(s['tier'] >= DETAIL and pressure > 0 for s in ordered)}
+              'drawn_fast_count': sum(s['tier'] >= DETAIL and pressure > 0 for s in ordered),
+              'part_pause_seconds': PART_PAUSE}
     return ordered, segments, parts, end, counts
 
 

@@ -180,9 +180,16 @@ class FilmBuilder:
         for stale in (self.work / 'assets').glob('element-*'):
             stale.unlink()  # assets are renumbered every build; a leftover layer file would attach to whatever now has its name
         canvas = self.manifest.get('canvas', {})
-        self.width = int(canvas.get('width', 1920))
-        self.height = int(canvas.get('height', 1080))
-        self.fps = int(canvas.get('fps', 30))
+        if not canvas.get('width') or not canvas.get('height'):
+            from aspect_ratio import resolve_canvas, DEFAULT_RATIO
+            resolved = resolve_canvas(canvas.get('aspect_ratio', DEFAULT_RATIO), canvas.get('width'), canvas.get('height'), canvas.get('fps', 30))
+            self.width, self.height, self.fps = resolved['width'], resolved['height'], resolved['fps']
+            self.aspect_ratio = resolved['aspect_ratio']
+        else:
+            self.width = int(canvas['width'])
+            self.height = int(canvas['height'])
+            self.fps = int(canvas.get('fps', 30))
+            self.aspect_ratio = canvas.get('aspect_ratio')
         if self.width < 320 or self.height < 240 or self.width % 2 or self.height % 2 or not 1 <= self.fps <= 60:
             raise ValueError('Canvas requires even width/height >=320x240 and fps within 1..60')
         self.fonts = check_coverage(self.manifest)  # every rendered character must have a glyph; pins role fonts
@@ -413,7 +420,7 @@ class FilmBuilder:
             raise ValueError('Captions start away from the speech; fix the alignment before rendering: ' + json.dumps(sync['outside_tolerance'], ensure_ascii=False))
         hand = self.manifest.get('hand', {})
         timeline = {'title': self.manifest['title'], 'source_notes': self.manifest.get('source_notes', []),
-                    'canvas': {'width': self.width, 'height': self.height, 'fps': self.fps},
+                    'canvas': {'width': self.width, 'height': self.height, 'fps': self.fps, **({'aspect_ratio': self.aspect_ratio} if getattr(self, 'aspect_ratio', None) else {})},
                     'paper': self.manifest.get('paper', '#FBF9F1'), 'cover_seconds': cover_seconds, 'ending': {'fade_seconds': fade, 'caption_hold_seconds': caption_hold},
                     'narration_master': master_report, 'caption_sync': sync,
                     'captions': {'presentation': 'burned', 'owner': 'caption_events'},

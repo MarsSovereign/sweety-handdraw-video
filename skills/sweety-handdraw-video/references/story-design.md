@@ -10,6 +10,33 @@
 - `beats`：每段口播、画面中的具体对象、动作、文字、强调位置以及与口播的对应关系。
 - `cover`：准确短标题、主视觉和与正文的一致性。
 - `asset_prompts`：生成要求、角色参考职责、是否包含文字、图像来源记录。
+- `presentation`：**导演密度模式**（不是用户选项）。模型根据受众与内容结构推断，写入 mode + reason：
+
+| mode | 密度 | 适用 | 页策略 |
+|---|---|---|---|
+| `picture_book` | sparse | 儿童绘本/故事 | 单页少内容，1 个 hero，画完长停 |
+| `focus_diagram` | medium | 单概念深挖（默认） | 一主图+关键标注 |
+| `dense_infographic` | dense | 知识科普/信息图 | 单页多模块 |
+| `accumulating_board` | dense | 黑板报/课堂讲解 | 底板累积，随讲随写 |
+| `step_sequence` | medium | 步骤教程 | 一步一焦点 |
+| `narrative_comic` | medium | 情绪/品牌叙事 | 分镜格推进 |
+
+```json
+"presentation": {
+  "mode": "accumulating_board",
+  "density": "dense",
+  "reason": "成人知识科普，概念需连续板书",
+  "page_content_policy": {
+    "max_heroes_per_page": 6,
+    "max_labels_per_page": 16,
+    "board_reuse": true,
+    "text_role": "board_labels",
+    "hold_after_draw_s": 0.8
+  }
+}
+```
+
+`storyboard.json` 同步写 `presentation`（至少 mode+reason）。`storyboard_lint` 按 mode 调整 `max_hold`、所需视觉数、每镜图片上限、画完停留与笔忙占比。出图 brief 必须带上本 mode 的笔预算与模块/hero 上限。
 
 这些字段记录设计判断，不是要求所有主题使用相同叙事。生活观点可以用具体困境引入；解释机制可以用对照或操作过程；故事保留人物行动与因果；文章改编不能任意删掉条件以换取戏剧性。
 
@@ -32,6 +59,7 @@
 ```json
 {
   "version": 1,
+  "presentation": {"mode": "focus_diagram", "reason": "单机制讲解，一主图带标注"},
   "max_hold_seconds": 8,
   "characters": [{"id": "fox", "reference": "inputs/characters/fox.png", "sha256": "参考图实际哈希"}],
   "shots": [

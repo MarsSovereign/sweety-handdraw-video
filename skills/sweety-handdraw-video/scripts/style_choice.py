@@ -1,4 +1,4 @@
-"""Snapshot the exact hand-drawn catalog, show an image picker, validate its decision."""
+"""Snapshot the hand-drawn catalog as a text list, validate style decisions. No preview wall."""
 import argparse
 import hashlib
 import io
@@ -29,7 +29,8 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def prepare_catalog(job, source):
+def prepare_catalog(job, source, require_previews=False):
+    """Build style/catalog.json from STYLES.md. Previews are best-effort and unused by native menus."""
     job, source = Path(job).resolve(), Path(source).resolve()
     directory = job / 'style'
     directory.mkdir(parents=True, exist_ok=True)
@@ -40,7 +41,9 @@ def prepare_catalog(job, source):
     manifest_path = source / 'assets/image-manifest.json'
     remote_images = json.loads(manifest_path.read_text())['images'] if manifest_path.exists() else {}
     fallback = PACKAGE / 'assets/style-previews'
-    hosted_previews = {item['id']: item for item in json.loads((fallback/'manifest.json').read_text())['images']}
+    hosted_previews = {}
+    if (fallback / 'manifest.json').is_file():
+        hosted_previews = {item['id']: item for item in json.loads((fallback / 'manifest.json').read_text())['images']}
     catalog = []
     for index, match in enumerate(matches):
         identity, name = match.groups()
@@ -50,35 +53,66 @@ def prepare_catalog(job, source):
         candidates = list((source / 'examples').glob(identity.zfill(2) + '-*.png')) if '.' not in identity else []
         candidates += list((source / ('assets/style-' + identity)).glob('anchor-*.png'))
         preview_path = directory / 'previews' / (identity + '.jpg')
-        # Every preview is served from the job directory; the browser never fetches a remote host.
-        if candidates:
-            image = Image.open(candidates[0]).convert('RGB')
-            image.thumbnail((720, 720))
-            image.save(preview_path, quality=87)
-        elif identity in hosted_previews and source == (PACKAGE/'dependencies/hand-drawn-styles').resolve():
-            shutil.copyfile(resolve_asset(fallback / hosted_previews[identity]['thumbnail']), preview_path)
-        else:
-            keys = [key for key in remote_images if key.startswith('examples/' + identity.zfill(2) + '-')]
-            keys += [key for key in remote_images if key.startswith('assets/style-' + identity + '/anchor-')]
-            if not keys:
-                raise ValueError('No real preview for style ' + identity)
-            record = remote_images[keys[0]]
-            urls = [record['url']] + ([record['fallback_url']] if record.get('fallback_url') else [])
-            content = fetch(keys[0], {**record, 'urls': urls}, source / keys[0])
-            image = Image.open(io.BytesIO(content)).convert('RGB')
-            image.thumbnail((720, 720))
-            image.save(preview_path, quality=87)
-        preview = 'previews/' + preview_path.name
-        bundled = source == (PACKAGE/'dependencies/hand-drawn-styles').resolve()
-        catalog.append({'id': identity, 'name': name, 'preview': preview,
-                        'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path),
-                        **({'drawing_mode': 'draw' if identity in DRAWN_STYLES else 'reveal', 'monochrome': identity in MONOCHROME_STYLES} if bundled else {})})
+        preview = None
+        try:
+            if candidates:
+                image = Image.open(candidates[0]).convert('RGB')
+                image.thumbnail((720, 720))
+                image.save(preview_path, quality=87)
+                preview = 'previews/' + preview_path.name
+            elif identity in hosted_previews and source == (PACKAGE / 'dependencies/hand-drawn-styles').resolve():
+                shutil.copyfile(resolve_asset(fallback / hosted_previews[identity]['thumbnail']), preview_path)
+                preview = 'previews/' + preview_path.name
+            else:
+                keys = [key for key in remote_images if key.startswith('examples/' + identity.zfill(2) + '-')]
+                keys += [key for key in remote_images if key.startswith('assets/style-' + identity + '/anchor-')]
+                if keys:
+                    record = remote_images[keys[0]]
+                    urls = [record['url']] + ([record['fallback_url']] if record.get('fallback_url') else [])
+                    content = fetch(keys[0], {**record, 'urls': urls}, source / keys[0])
+                    image = Image.open(io.BytesIO(content)).convert('RGB')
+                    image.thumbnail((720, 720))
+                    image.save(preview_path, quality=87)
+                    preview = 'previews/' + preview_path.name
+                elif require_previews:
+                    raise ValueError('No real preview for style ' + identity)
+        except (OSError, ValueError, KeyError):
+            if require_previews:
+                raise
+            preview = None
+        bundled = source == (PACKAGE / 'dependencies/hand-drawn-styles').resolve()
+        entry = {'id': identity, 'name': name, 'preview': preview,
+                 'recipe': 'recipes/' + recipe_path.name, 'recipe_sha256': digest(recipe_path)}
+        if bundled:
+            entry.update(drawing_mode='draw' if identity in DRAWN_STYLES else 'reveal',
+                         monochrome=identity in MONOCHROME_STYLES)
+        catalog.append(entry)
     if not catalog:
         raise ValueError('No numbered styles in the selected STYLES.md')
     catalog.sort(key=lambda entry: tuple(int(part) for part in entry['id'].split('.')))
     snapshot = {'source': str(source), 'styles_sha256': digest(source / 'STYLES.md'), 'styles': catalog}
     (directory / 'catalog.json').write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
     return snapshot
+
+
+def text_style_menu(catalog, as_records=False):
+    """Default option is model inference; numbered styles are soft hints, not constraints."""
+    styles = catalog['styles'] if isinstance(catalog, dict) else catalog
+    if as_records:
+        rows = [{'id': 'inferred', 'label': '模型推理（默认）', 'hint': '按主题与内容自动选；列表不约束模型'}]
+        for entry in styles:
+            mode = entry.get('drawing_mode', '')
+            tag = ' · 逐笔' if mode == 'draw' else (' · 揭示' if mode == 'reveal' else '')
+            rows.append({'id': entry['id'], 'label': entry['name'], 'drawing_mode': mode, 'tag': tag})
+        rows.append({'id': 'custom', 'label': '自定义描述', 'hint': '用户一句话'})
+        return rows
+    lines = ['0) 模型推理（默认）— 按主题与内容自动选；下列风格仅为可选项，不约束模型']
+    for index, entry in enumerate(styles, 1):
+        mode = entry.get('drawing_mode', '')
+        tag = ' [逐笔]' if mode == 'draw' else (' [揭示]' if mode == 'reveal' else '')
+        lines.append(f"{index}) {entry['id']}  {entry['name']}{tag}")
+    lines.append(f"{len(styles) + 1}) 自定义描述")
+    return lines
 
 
 def validate_selection(selection, catalog):
@@ -206,8 +240,8 @@ def serve_picker(job, source, port=0):
     while not (job / 'style/selection.json').is_file() and time.monotonic() < deadline:
         server.handle_request()
     if not (job / 'style/selection.json').is_file():
-        selection = {'mode':'catalog_auto', 'confirmation':'timeout_default',
-                     'evidence':'Optional style choice waited 60 seconds; model will match the content to the catalog'}
+        selection = {'mode':'inferred', 'confirmation':'timeout_default',
+                     'evidence':'Optional style choice waited 60 seconds; model infers style from content (list is non-binding)'}
         (job / 'style/selection.json').write_text(json.dumps(selection, ensure_ascii=False, indent=2))
     server.server_close()
     print('STYLE_SELECTION_SAVED=' + str(job / 'style/selection.json'), flush=True)

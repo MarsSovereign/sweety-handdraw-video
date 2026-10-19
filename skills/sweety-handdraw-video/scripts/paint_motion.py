@@ -11,6 +11,7 @@ SHADE_RAMP = .3       # seconds over which a broad soft stroke blends flat color
 SCALES = (1., 1.5, 2., 3.)
 FILL_FACTOR = 6.      # coloring cap: a broad marker has no detail to follow, so time-lapsed coloring reads as human at 6x
 FILL_FRAME_PX = 120.  # a broad marker may sweep this far per frame: its own width keeps the swept color continuous
+PART_PAUSE = .12      # short rest when the marker moves to the next semantic part
 
 
 def inpaint_lines(pixels, line_zone):
@@ -212,6 +213,11 @@ def timeline(regions, shading, part_count, tip, pace, lifts=1., start=0., total=
                 tip = points[-1]
             bands.append(band)
         parts.append([part_start / total, cursor / total])
+        if part_start < cursor and part + 1 < part_count and any(r['part'] == part + 1 for r in regions):
+            pause = PART_PAUSE * min(1., FILL_SPEED / max(pace, 1e-6))
+            segments.append({'kind': 'pause', 'start': cursor / total, 'end': (cursor + pause) / total,
+                             'points': [tip.tolist(), tip.tolist()]})
+            cursor += pause
     return segments, parts, bands, cursor, tip
 
 

@@ -70,6 +70,10 @@ def verify_art_direction(root, manifest):
         raise ValueError('Narrative route requires a model decision, reason and director review')
     if route['decision']!='default_life_concept' and not route.get('director_plan'):
         raise ValueError('A non-default narrative requires an omniailab director plan')
+    from presentation import validate_presentation
+    if not design.get('presentation'):
+        raise ValueError('design.json needs presentation.mode (picture_book|focus_diagram|dense_infographic|accumulating_board|step_sequence|narrative_comic) and reason — director density, not a user option')
+    presentation = validate_presentation(design['presentation'], 'design.json')
     dependency=PACKAGE/'dependencies/sweety-image-art-direction/GUIDE.md'
     if not dependency.is_file():
         raise ValueError('Mandatory sweety-image-art-direction dependency is missing')
@@ -86,7 +90,7 @@ def verify_art_direction(root, manifest):
         if profile is None:
             raise ValueError('Unknown hand preset: '+identity)
         count+=check_record(PACKAGE/'assets/hands/art-direction.json',[(PACKAGE/'assets/hands'/profile['source'],None)],dependency_hash)
-    return {'dependency_sha256':dependency_hash,'reviewed_image_uses':count, 'style':style_review, 'drawing_plan':drawing_review}
+    return {'dependency_sha256':dependency_hash,'reviewed_image_uses':count, 'style':style_review, 'drawing_plan':drawing_review, 'presentation':presentation}
 
 
 def bind_evidence(record_path):

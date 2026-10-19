@@ -8,6 +8,7 @@ import statistics
 import sys
 from pathlib import Path
 from line_drawing import VIDEO_LAPSE
+from presentation import MODES, DEFAULT_MODE, get_mode, policy as presentation_policy, validate_presentation
 
 COVER = 1.0  # video time = narration time + the fixed one-second cover
 PICTURES = ('illustration', 'diagram')
@@ -34,11 +35,22 @@ def load(root, manifest):
     return json.loads((Path(root) / reference).read_text()) if reference else None
 
 
+def presentation_mode(board):
+    """Director mode on the storyboard; default focus_diagram keeps old numeric gates working."""
+    if board.get('presentation'):
+        return validate_presentation(board['presentation'], 'storyboard.json')['mode']
+    return board.get('presentation_mode') or DEFAULT_MODE
+
+
 def max_hold(board):
-    value = float(board.get('max_hold_seconds', 8))
-    if not 5 <= value <= 12:
-        raise ValueError('storyboard max_hold_seconds must be within 5..12')
-    return value
+    mode = presentation_mode(board)
+    rules = presentation_policy(mode)
+    low, high = rules['hold_range']
+    default = rules['max_hold_seconds']
+    value = float(board.get('max_hold_seconds', default))
+    if not low <= value <= high:
+        raise ValueError(f'storyboard max_hold_seconds must be within {low}..{high} for presentation mode {mode}')
+    return value, mode, rules
 
 
 def group_beats(beat_ids, group):
@@ -85,7 +97,8 @@ def spans(board, beats):
 
 def plan(board, beats):
     """Checks that need only the storyboard and beat times; returns the per-visual drawing budget."""
-    hold, errors, warnings = max_hold(board), [], []
+    hold, mode, rules = max_hold(board)
+    errors, warnings = [], []
     timed = spans(board, beats)
     times = {beat['id']: beat for beat in beats}
     characters = {character.get('id') for character in board.get('characters', [])}
@@ -119,7 +132,8 @@ def plan(board, beats):
     narration = timed[-1][2] - timed[0][1]
     visuals = [visual for shot, _, _ in timed for visual in shot.get('visuals', [])]
     pictures = sum(visual.get('kind') in PICTURES for visual in visuals)
-    required = math.ceil(narration / hold)
+    # Mode-aware cadence: picture_book needs fewer full visuals; accumulating_board fewer redraws.
+    required = max(1, math.ceil(narration / hold * rules['cadence_factor']))
     shares, text_only = {}, 0.
     for shot, start, end in timed:
         shares[shot.get('type')] = shares.get(shot.get('type'), 0) + (end - start) / narration
@@ -145,9 +159,29 @@ def plan(board, beats):
     stretch = longest(points, timed[0][1], timed[-1][2])
     if stretch[0] > hold:
         warnings.append(f'Estimated {stretch[0]:.1f}s with nothing new between {stretch[1]:.1f}s and {stretch[2]:.1f}s; split that shot or add a visual')
+    # Per-shot density from presentation mode (heroes = illustration/diagram count).
+    max_pics = rules['max_picture_visuals_per_shot']
+    for shot, start, end in timed:
+        label = shot.get('id', shot['beats'][0])
+        pics = [v for v in shot.get('visuals', []) if v.get('kind') in PICTURES]
+        labels = [v for v in shot.get('visuals', []) if v.get('kind') == 'text_group']
+        if len(pics) > max_pics and not shot.get('density_exception'):
+            errors.append(f'{label}: {len(pics)} picture visuals but presentation mode {mode} allows at most {max_pics} '
+                          f'({rules["summary"]}); split the shot, accumulate on one board, or set density_exception')
+        if len(labels) > rules['max_labels_per_shot'] and not shot.get('density_exception'):
+            errors.append(f'{label}: {len(labels)} text_group visuals exceed mode {mode} label budget '
+                          f'({rules["max_labels_per_shot"]})')
+        if mode == 'picture_book' and any(v.get('background') for v in pics) and len(pics) > 1:
+            errors.append(f'{label}: picture_book pages stay image-led with one hero; drop extra pictures or change mode')
+        if mode == 'accumulating_board' and not shot.get('board') and len(pics) >= 2:
+            warnings.append(f'{label}: accumulating_board works best with a shared "board" id so beats add marks instead of redrawing')
+    if mode in ('accumulating_board', 'dense_infographic') and not board.get('presentation', {}).get('reason') and not board.get('presentation'):
+        warnings.append(f'presentation mode {mode} should be declared under storyboard.presentation with a reason')
     stats = {'narration_seconds': round(narration, 2), 'max_hold_seconds': hold, 'required_visuals': required,
              'planned_visuals': len(visuals), 'planned_pictures': pictures, 'text_only_share': round(text_only, 3),
-             'shot_type_shares': {key: round(value, 3) for key, value in shares.items()}}
+             'shot_type_shares': {key: round(value, 3) for key, value in shares.items()},
+             'presentation_mode': mode, 'presentation_density': rules['density'],
+             'drawing_share_limit': rules['drawing_share']}
     return {'errors': errors, 'warnings': warnings, 'stats': stats, 'visuals': rows}
 
 
@@ -228,7 +262,8 @@ def usage(root, manifest, board):
 
 def timing(board, timeline):
     """Actual cadence and main-illustration reuse from the built timeline."""
-    hold, errors = max_hold(board), []
+    hold, mode, rules = max_hold(board)
+    errors = []
     visuals = {visual['id']: visual for shot in board['shots'] for visual in shot.get('visuals', [])}
     shot_of = {beat_id: shot for shot in board['shots'] for beat_id in shot['beats']}
     beats = [beat for page in timeline['pages'] for beat in page['beats']]
@@ -323,7 +358,7 @@ def pen_time(timeline):
             asset = timeline['assets'][event['asset']]
             for segment in asset.get('segments', []):
                 kind = segment['kind']
-                if kind == 'travel':
+                if kind in ('travel', 'pause'):
                     key = 'pen_up'
                 elif asset['type'] == 'illustration':
                     key = 'reveal' if asset.get('mode') == 'reveal' else 'line' if kind in ('ink', 'sketch') else 'colour'
@@ -345,13 +380,17 @@ def check_build(root, manifest, timeline):
         planned = plan(board, beats)
         late, cadence = timing(board, timeline)
         share, spent = pen_busy_share(timeline), pen_time(timeline)
-        if share > MAX_DRAWING_SHARE:
-            late.append(f'The pen is busy {share:.0%} of the narration (limit {MAX_DRAWING_SHARE:.0%}; ' +
+        _, mode, rules = max_hold(board)
+        draw_limit = rules.get('drawing_share', MAX_DRAWING_SHARE)
+        if share > draw_limit:
+            late.append(f'The pen is busy {share:.0%} of the narration (limit {draw_limit:.0%} for mode {mode}; ' +
                         ', '.join(f'{key} {value:.0%}' for key, value in spent.items() if value) + '), so finished pictures barely hold: '
                         'give pictures less to draw, draw fewer per page, or let one board accumulate across beats instead of redrawing')
         median_hold = cadence.get('finished_hold_median_seconds')
-        if median_hold is not None and median_hold < 1.:
-            warnings = warnings + [f'A finished picture holds only {median_hold:.2f}s before the next element (median; validated films hold about 1.1-1.7s): '
+        min_hold = rules.get('min_finished_hold_median', 1.0)
+        if median_hold is not None and median_hold < min_hold:
+            warnings = warnings + [f'A finished picture holds only {median_hold:.2f}s before the next element '
+                                   f'(median; mode {mode} expects ≥{min_hold:g}s): '
                                    'give pictures less to draw or let one board accumulate across beats instead of redrawing']
         report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors,
                   'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'pen_busy_share': round(share, 3), 'pen_time_share': spent}}

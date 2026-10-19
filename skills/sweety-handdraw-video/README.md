@@ -4,12 +4,20 @@
 
 - 使用入口：[SKILL.md](SKILL.md)
 - 项目说明、安装与样片：[GitHub README](https://github.com/threerocks/sweety-handdraw-video)
-- 开始时的可选设置：[画风、手臂、声音、广告、水印与字幕](references/production-options.md)
+- 开始时的可选设置：[配置类型、比例、风格、声音与字幕](references/production-options.md)
 - 编写任务：[运行格式](references/runtime-contract.md)
 - 字幕与收尾：[模型设计规则](references/subtitle-design.md)
 - 内置依赖和冲突处理：[依赖路由](references/dependencies.md)
 
 旁白以本地为主：已安装并明确配置的 VoxCPM2，或兼容的本机 VoiceStudio 服务；火山豆包、Gemini TTS 只在用户配置了自己的密钥并选择时使用；已核对的导出音频可以离线复用。音色目录与试听见[本地声音运行](references/local-runtime.md)。生成新图片还需宿主的图像工具（Claude Code 需接入生图工具 / MCP 或使用用户提供的插画）；Python、fontTools 与 FFmpeg 负责本地合成，图片隐私清理为纯 Python。支持 macOS 与 Linux，`scripts/setup.sh` 一次装好运行环境。内置的参考指南不需要另行安装为 Skills。
+
+### v1.4：原生选项、竖屏默认、导演密度
+
+- **原生选项，不弹网页。** 先选配置类型：模型推理（默认）或主动选择。主动路径只问比例 → 风格（文字列表，无预览）→ 声音 → 字幕；兼容 Claude Code / Codex / TTY。
+- **默认 9:16（1080×1920）**，另有 3:4、2:3、16:9、4:3、3:2 与自定义。
+- **风格默认模型推理**，目录为软参考、不约束模型；揭示仍须用户明确接受。
+- **presentation.mode 导演密度**：绘本稀疏 / 科普密集 / 板书累积等，由模型推断，lint 强制执行。
+- **拟人绘制**：部位切换短暂停顿；线+色连续之字；pause 段计入抬笔时间。
 
 ### v1.3：像人一样画、按段配音
 
