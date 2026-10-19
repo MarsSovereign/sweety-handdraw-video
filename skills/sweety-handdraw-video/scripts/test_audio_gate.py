@@ -29,6 +29,13 @@ def save(path, samples):
 
 
 class AudioGateTests(unittest.TestCase):
+    def test_tied_persistence_reports_the_tone_peak_instead_of_an_adjacent_bin(self):
+        clean = speech_like([(2.5, .5)] * 4)
+        time = np.arange(len(clean)) / SAMPLE_RATE
+        for frequency in (50, 235):
+            report = measure(clean + .01 * np.sin(2 * np.pi * frequency * time))
+            self.assertEqual(report['tonal_lines_hz_persistence'][0][0], frequency)
+
     def test_clean_speech_passes_and_each_defect_fails(self):
         clean = speech_like([(2.5, .5)] * 4)
         self.assertEqual(measure(clean)['status'], 'PASS')

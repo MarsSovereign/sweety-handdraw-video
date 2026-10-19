@@ -54,7 +54,10 @@ def tonal_lines(x):
     hits = (np.array(rows)[:, band] > TONE_EXCESS_DB).sum(axis=0)
     persistence = hits / len(rows)
     lines = []
-    for index in np.argsort(-persistence):
+    # Adjacent FFT bins often tie on persistence. Rank the actual spectral peak next,
+    # rather than letting NumPy's platform-dependent tie order name a neighbouring bin.
+    excess = np.median(np.asarray(rows)[:, band], axis=0)
+    for index in np.lexsort((frequencies[band], -excess, -persistence)):
         if persistence[index] < TONE_PERSISTENCE:
             break
         if hits[index] < TONE_MIN_WINDOWS:

@@ -27,6 +27,15 @@ def rms(samples, start, end):
 
 
 class MusicBedTests(unittest.TestCase):
+    def test_looped_samples_have_exact_length_and_blended_seams(self):
+        source = np.repeat(np.arange(12, dtype=np.float32)[:, None], 2, axis=1)
+        looped = music_bed.loop_music(source, 27, 4)
+        self.assertEqual(looped.shape, (27, 2))
+        self.assertTrue(np.isfinite(looped).all())
+        self.assertTrue(np.all(looped[8:12, 0] < source[8:12, 0]))
+        np.testing.assert_array_equal(looped[12:16], source[4:8])
+        np.testing.assert_array_equal(music_bed.loop_music(source, 5, 4), source[:5])
+
     def prepare(self, directory, music, source_seconds=3.):
         root = Path(directory)
         work = root / 'work'
