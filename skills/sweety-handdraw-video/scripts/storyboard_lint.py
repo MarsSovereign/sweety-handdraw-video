@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from line_drawing import VIDEO_LAPSE
 from presentation import MODES, DEFAULT_MODE, get_mode, policy as presentation_policy, validate_presentation
+from composition import measure_pages, validate_boards, validate_composition, validate_board_pages, validate_board_timing
 
 COVER = 1.0  # video time = narration time + the fixed one-second cover
 PICTURES = ('illustration', 'diagram')
@@ -98,7 +99,7 @@ def spans(board, beats):
 def plan(board, beats):
     """Checks that need only the storyboard and beat times; returns the per-visual drawing budget."""
     hold, mode, rules = max_hold(board)
-    errors, warnings = [], []
+    errors, warnings = validate_boards(board, mode), []
     timed = spans(board, beats)
     times = {beat['id']: beat for beat in beats}
     characters = {character.get('id') for character in board.get('characters', [])}
@@ -117,6 +118,7 @@ def plan(board, beats):
             errors.append(f'{label}: a {shot["type"]} shot needs {SHOT_TYPES[shot["type"]][0]}')
         if not str(shot.get('purpose', '')).strip():
             errors.append(f'{label}: state what this shot shows beyond the narration (purpose)')
+        errors.extend(validate_composition(shot, mode))
         # Estimate: one visual group per shot, drawn in order and split by weight like build().
         weights = [float(visual.get('weight', 3 if visual.get('kind') == 'illustration' else 1)) for visual in visuals]
         cursor = start + LEAD
@@ -125,7 +127,7 @@ def plan(board, beats):
             seconds = window * weight / sum(weights)
             rows.append({'shot': label, 'type': shot.get('type'), 'visual': visual.get('id'), 'kind': visual.get('kind'), 'subject': visual.get('subject'),
                          'start': round(cursor, 2), 'seconds': round(seconds, 2), 'scene': bool(visual.get('background')),
-                         'complexity': tier(seconds * MAX_DRAWING_SHARE, hold) if visual.get('kind') in PICTURES else 'short text lines'})
+                         'complexity': tier(seconds * rules['drawing_share'], hold) if visual.get('kind') in PICTURES else 'short text lines'})
             if seconds < .5:
                 errors.append(f'{label}/{visual.get("id")}: only {seconds:.1f}s to draw; give the shot more beats or fewer visuals')
             cursor += seconds + GAP
@@ -215,7 +217,7 @@ def anchor_beat(covered, beat_ids, action):
 
 def usage(root, manifest, board):
     """Every planned visual is drawn in its own shot; every illustration is planned; characters cite locked references."""
-    root, errors = Path(root), []
+    root, errors = Path(root), validate_board_pages(manifest, board)
     visuals = {visual['id']: (shot, visual) for shot in board['shots'] for visual in shot.get('visuals', []) if visual.get('id')}
     placed = {}
     for page_index, beat_ids, action in page_actions(manifest):
@@ -294,7 +296,10 @@ def timing(board, timeline):
             run = run + 1 if current and current == previous else int(bool(current))
             previous = current
             shot = shot_of.get(beat['id'], {})
-            if run == 3 and not str(shot.get('callback', '')).strip():
+            adding_to_board = (mode == 'accumulating_board' and shot.get('board')
+                               and any(not event['caption'] and event.get('visual') in visuals
+                                       and beat['start'] <= event['start'] < beat['end'] for event in page['events']))
+            if run == 3 and not adding_to_board and not str(shot.get('callback', '')).strip():
                 source, crop = json.loads(current)
                 errors.append(f'{source}{" crop " + str(crop) if crop else ""} stays the main visual for more than 2 consecutive beats (through {beat["id"]}, shot {shot.get("id")}); '
                               'start a new illustration or mark the shot "callback" with a reason')
@@ -323,6 +328,9 @@ def drawing_time(timeline):
             if not measured:
                 continue
             window, label = event['end'] - event['start'], event.get('visual') or event['asset']
+            asset = timeline['assets'][event['asset']]
+            if asset.get('time_compression', 1) > 1.001 or asset.get('lines', {}).get('speed_over_cap') or asset.get('painting', {}).get('fill_over_cap'):
+                errors.append(f'{label}: the engine exceeded its drawing budget; simplify the image or extend its window across beats instead of compressing its strokes')
             if window < measured.get('minimum_seconds', 0) - .02:  # the reported minimum is rounded to 0.01 s
                 strokes = f' ({measured["stroke_count"]} strokes)' if measured.get('stroke_count') else ''
                 errors.append(f'{label}: {window:.1f}s drawing window but the image needs at least {measured["minimum_seconds"]:.1f}s{strokes}; '
@@ -345,6 +353,29 @@ def pen_busy_share(timeline):
         covered += max(0., end - max(start, reach))
         reach = max(reach, end)
     return covered / narration_seconds(timeline)
+
+
+def finished_picture_hold_share(timeline, board=None):
+    """Readable idle time after a picture is complete; blank lead-in and the closing tail do not count."""
+    seconds = 0.
+    narration_end = timeline['pages'][-1]['speech_end']
+    diagrams = {visual.get('id') for shot in (board or {}).get('shots', []) for visual in shot.get('visuals', []) if visual.get('kind') == 'diagram'}
+    for page in timeline['pages']:
+        events = [event for event in page['events'] if not event['caption']]
+        picture_groups = {}
+        for event in events:
+            if event.get('image') or event.get('visual') in diagrams:
+                picture_groups.setdefault(event.get('visual') or event['asset'], []).append(event)
+        completed_graphics = [(max(event['end'] for event in group), min(event.get('hide', narration_end) for event in group)) for group in picture_groups.values()]
+        start = page['beats'][0]['start']
+        end = min(narration_end, page.get('end', page['speech_end']))
+        boundaries = sorted({start, end} | {max(start, min(end, event[key])) for event in events for key in ('start', 'end')})
+        for left, right in zip(boundaries, boundaries[1:]):
+            drawing = any(event['start'] < right and event['end'] > left for event in events)
+            completed_picture = any(completed <= left and hidden >= right for completed, hidden in completed_graphics)
+            if not drawing and completed_picture:
+                seconds += right - left
+    return seconds / narration_seconds(timeline)
 
 
 def pen_time(timeline):
@@ -380,8 +411,9 @@ def check_build(root, manifest, timeline):
         planned = plan(board, beats)
         late, cadence = timing(board, timeline)
         share, spent = pen_busy_share(timeline), pen_time(timeline)
+        reading_share = finished_picture_hold_share(timeline, board)
         _, mode, rules = max_hold(board)
-        draw_limit = rules.get('drawing_share', MAX_DRAWING_SHARE)
+        draw_limit = min(MAX_DRAWING_SHARE, rules.get('drawing_share', MAX_DRAWING_SHARE))
         if share > draw_limit:
             late.append(f'The pen is busy {share:.0%} of the narration (limit {draw_limit:.0%} for mode {mode}; ' +
                         ', '.join(f'{key} {value:.0%}' for key, value in spent.items() if value) + '), so finished pictures barely hold: '
@@ -392,8 +424,22 @@ def check_build(root, manifest, timeline):
             warnings = warnings + [f'A finished picture holds only {median_hold:.2f}s before the next element '
                                    f'(median; mode {mode} expects ≥{min_hold:g}s): '
                                    'give pictures less to draw or let one board accumulate across beats instead of redrawing']
-        report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors,
-                  'warnings': warnings, 'stats': {**planned['stats'], **cadence, 'pen_busy_share': round(share, 3), 'pen_time_share': spent}}
+        shortest_hold = cadence.get('finished_hold_min_seconds')
+        if shortest_hold is not None and shortest_hold < 1.:
+            warnings.append(f'A finished picture holds only {shortest_hold:.2f}s before the next element; below the 1.00s reading threshold. Keep the page and simplify the next drawing')
+        if reading_share < .30 - 1e-6:
+            message = (f'Finished pictures get only {reading_share:.0%} of the narration as static reading time (minimum 30%); '
+                       'blank lead-in and closing silence do not count. Simplify the board or finish its drawings earlier')
+            if manifest.get('runtime_fixture'):
+                warnings.append(message)
+            else:
+                late.append(message)
+        composition = measure_pages(root, timeline, board, fixture=manifest.get('runtime_fixture', False))
+        report = {'errors': planned['errors'] + usage(root, manifest, board) + late + errors + composition['errors'] + validate_board_timing(board, timeline),
+                  'warnings': planned['warnings'] + warnings + composition['warnings'],
+                  'stats': {**planned['stats'], **cadence, 'pen_busy_share': round(share, 3), 'pen_time_share': spent,
+                            'finished_picture_hold_share': round(reading_share, 3)},
+                  'composition': composition}
     if report['errors']:
         raise ValueError('Storyboard lint failed:\n- ' + '\n- '.join(report['errors']))
     return report

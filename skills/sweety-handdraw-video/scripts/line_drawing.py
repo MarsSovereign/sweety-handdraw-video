@@ -117,28 +117,22 @@ def apply_order(stroke, index):
 
 
 def order(strokes, part_count, tip, reverse=REVERSE_COST):
-    """Within each part: silhouette, key features, structure, details; greedy nearest start from the pen.
-    Going against the direction prior costs `reverse` px of extra travel (a hurried hand cares less)."""
+    """Within each semantic part and priority tier, scan top to bottom then left to right.
+    Travel distance may choose a stroke's direction, never move a lower stroke ahead of an upper one."""
     ordered = []
     tip = np.asarray(tip, float)
     for part in range(part_count):
         for tier in (SILHOUETTE, KEY, STRUCTURE, DETAIL, TEXTURE):
-            pool = [stroke for stroke in strokes if stroke['part'] == part and stroke['tier'] == tier]
-            while pool:
-                choice = None
-                for stroke in pool:
-                    index, penalty = orient(stroke, tip, reverse)
-                    points = stroke['points']
-                    cost = np.linalg.norm(points[index[0]] - tip)
-                    if penalty is not None and np.linalg.norm(points[index[-1]] - tip) + penalty < cost:
-                        index, cost = index[::-1], np.linalg.norm(points[index[-1]] - tip) + penalty
-                    if choice is None or cost < choice[0]:
-                        choice = (cost, stroke, index)
-                _, best, index = choice
-                pool = [stroke for stroke in pool if stroke is not best]
-                apply_order(best, index)
-                ordered.append(best)
-                tip = best['points'][-1]
+            pool = sorted((stroke for stroke in strokes if stroke['part'] == part and stroke['tier'] == tier),
+                          key=lambda stroke: (float(stroke['points'][:, 1].min()), float(stroke['points'][:, 0].min()), stroke['index']))
+            for stroke in pool:
+                index, penalty = orient(stroke, tip, reverse)
+                points = stroke['points']
+                if penalty is not None and np.linalg.norm(points[index[-1]] - tip) + penalty < np.linalg.norm(points[index[0]] - tip):
+                    index = index[::-1]
+                apply_order(stroke, index)
+                ordered.append(stroke)
+                tip = stroke['points'][-1]
     return ordered, tip
 
 

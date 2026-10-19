@@ -8,7 +8,7 @@ Agent 负责理解内容、写口播、设计分镜和生成插画；本地工�
 
 [看有声样片](#精选样片) · [安装与环境](#安装与环境) · [开始制作](#开始制作) · [全部制作选项](#全部制作选项) · [常见问题](#常见问题) · [关注作者](https://x.com/leo_xiaolei)
 
-> **当前版本：v1.4-dev（2026-10-19）**。原生选项（模型推理/主动选择），默认竖屏 9:16；风格文字列表+模型推理；导演 `presentation.mode` 控制单页疏密；拟人绘制部位停顿。上一封板为 v1.3（2026-10-17）。以包内 `VERSION` 和 Git 标签为准。
+> **当前版本：v1.4.1（2026-10-20）**。发布入口与安装包版本统一；密集画面增加构图约定和实际页面范围检查。原生选项（模型推理/主动选择），默认竖屏 9:16；风格文字列表+模型推理；导演 `presentation.mode` 控制单页疏密；拟人绘制部位停顿。上一封板为 v1.3（2026-10-17）。以包内 `VERSION` 和 Git 标签为准。
 
 ## 精选样片
 
@@ -98,7 +98,7 @@ Agent 负责理解内容、写口播、设计分镜和生成插画；本地工�
 npx skills add threerocks/sweety-handdraw-video --skill sweety-handdraw-video --agent claude-code codex --global --copy --yes
 ```
 
-安装位置：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`，Codex 为 `~/.agents/skills/sweety-handdraw-video`（该命令写入的通用目录）。只装一个宿主时去掉另一个 `--agent` 值；不加 `--global` 则装进当前项目（Claude Code 为 `.claude/skills/`）。此命令安装仓库当前公开内容。需要固定本版时，使用 [v1.3 安装包](https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.3/sweety-handdraw-video-v1.3.zip)；上一版为 [v1.2.3](https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.2.3/sweety-handdraw-video-v1.2.3.zip)。
+安装位置：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`，Codex 为 `~/.agents/skills/sweety-handdraw-video`（该命令写入的通用目录）。只装一个宿主时去掉另一个 `--agent` 值；不加 `--global` 则装进当前项目（Claude Code 为 `.claude/skills/`）。此命令安装仓库当前公开内容。需要固定本版时，使用 [v1.4.1 安装包](https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.4.1/sweety-handdraw-video-v1.4.1.zip)；[全部版本](https://github.com/threerocks/sweety-handdraw-video/releases)。下载同页的 `SHA256SUMS.txt`，执行 `shasum -a 256 -c SHA256SUMS.txt` 校验。更新仓库不会自动更新已安装的副本；替换完整 Skill 目录后，读取其中的 `VERSION`，本版应为 `1.4.1`。
 
 手动安装：将包内的 `sweety-handdraw-video` **整个文件夹**放入宿主的 Skills 目录，例如 `~/.claude/skills/sweety-handdraw-video`（Claude Code）或 `~/.codex/skills/sweety-handdraw-video`（Codex）。更新前备份旧目录；仅复制 `SKILL.md` 会缺少脚本、素材和内置依赖。手部、画风预览与试听已随包提供（约 38 MB），装好即可离线使用，不再依赖首次下载。
 
@@ -355,7 +355,11 @@ VoiceStudio 需要 `/engines/tts`、`/generate` 及可选 `/transcribe` 接口�
 python -m unittest discover -s skills/sweety-handdraw-video/scripts -p 'test*.py' -v
 python skills/sweety-handdraw-video/scripts/smoke_test.py --output /tmp/handdraw-smoke-new
 python3 tools/package.py --output dist
+python3 tools/release.py check
+python3 -m unittest discover -s tools -p 'test*.py' -v
 ```
+
+v1.4.1 新增发布一致性和实际画面范围检查，变更、安装校验与验收边界见 [发布记录](docs/releases/v1.4.1.md)。标签触发发布工作流，先完成 macOS / Linux 检查，再从标签提交打包上传 ZIP 与校验文件；稳定标签不移动。
 
 v1.3 记录：158 项回归通过（1 项平台用例跳过）、离线冒烟短片通过、安装包 843 个文件、49.4 MB 通过核验；蛇故事以 v1.3 流程端到端重做（揭示模式），软件工具片以修复后的引擎重做（18 幅插画全部逐笔绘制、无淡入，终帧与原图一致）；2026-10-17 增补宽墨线角点覆盖、混音电平、数字比较与填充最短时长修复，并新增配乐自动准备。相应成片工程检查、声音门禁与字幕同步均通过。该结果不能替代视频观感、故事事实、听感或学习效果验收。更多记录见 [验证范围](docs/validation.md)。
 

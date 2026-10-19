@@ -9,7 +9,7 @@ MODES = {
         'density': 'sparse',
         'max_hold_seconds': 10,
         'hold_range': (8, 12),
-        'cadence_factor': 1.35,          # fewer new visuals required
+        'cadence_factor': 1.35,
         'max_picture_visuals_per_shot': 1,
         'max_labels_per_shot': 2,
         'board_reuse': False,
@@ -125,6 +125,7 @@ def validate_presentation(block, where='design.json'):
 def page_content_policy(mode):
     """Fields the director copies into design.json / per-image briefs."""
     item = policy(mode)
+    from composition import MIN_CONTENT_EXTENT
     return {
         'max_heroes_per_page': item['max_picture_visuals_per_shot'],
         'max_labels_per_page': item['max_labels_per_shot'],
@@ -132,6 +133,8 @@ def page_content_policy(mode):
         'text_role': item['text_role'],
         'hold_after_draw_s': item['min_finished_hold_median'],
         'stroke_budget_share': item['drawing_share'],
+        'content_extent_review_ratio': MIN_CONTENT_EXTENT[mode],
+        'composition_required': mode in ('dense_infographic', 'accumulating_board'),
     }
 
 

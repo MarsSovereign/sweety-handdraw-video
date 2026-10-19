@@ -1,0 +1,57 @@
+name: Publish tagged skill
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag to publish
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify tag, installation metadata, archive and checksums
+        run: python tools/release.py prepare --tag "$RELEASE_TAG" --output dist
+      - name: Publish verified installation files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > /tmp/release-draft; then
+            if [ "$(cat /tmp/release-draft)" != true ]; then
+              gh release download "$RELEASE_TAG" --pattern SHA256SUMS.txt --dir /tmp/published-checksum
+              cmp dist/SHA256SUMS.txt /tmp/published-checksum/SHA256SUMS.txt
+              gh release download "$RELEASE_TAG" --pattern "sweety-handdraw-video-${RELEASE_TAG}.zip" --dir /tmp/published-checksum
+              (cd /tmp/published-checksum && sha256sum --check SHA256SUMS.txt)
+              gh release download "$RELEASE_TAG" --pattern package-sha256.json --dir /tmp/published-checksum
+              cmp dist/package-sha256.json /tmp/published-checksum/package-sha256.json
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes-file "docs/releases/${RELEASE_TAG}.md"
+          fi
+          gh release upload "$RELEASE_TAG" "dist/sweety-handdraw-video-${RELEASE_TAG}.zip" dist/SHA256SUMS.txt dist/package-sha256.json --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

@@ -74,6 +74,11 @@ def verify_art_direction(root, manifest):
     if not design.get('presentation'):
         raise ValueError('design.json needs presentation.mode (picture_book|focus_diagram|dense_infographic|accumulating_board|step_sequence|narrative_comic) and reason — director density, not a user option')
     presentation = validate_presentation(design['presentation'], 'design.json')
+    from composition import check_presentation_match
+    from storyboard_lint import load as load_storyboard
+    board = load_storyboard(root, manifest)
+    if board is not None:
+        check_presentation_match(presentation, board)
     dependency=PACKAGE/'dependencies/sweety-image-art-direction/GUIDE.md'
     if not dependency.is_file():
         raise ValueError('Mandatory sweety-image-art-direction dependency is missing')

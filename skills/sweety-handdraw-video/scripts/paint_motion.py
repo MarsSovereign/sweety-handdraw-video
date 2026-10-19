@@ -79,7 +79,7 @@ def color_regions(rgb, visible, owners, part_count, labels=None):
             region = {'part': part, 'offset': np.array([left, top]), 'mask': found == value}
             region.update(area=int(region['mask'].sum()), flat=np.median(region_pixels(region, rgb), axis=0))
             regions.append(region)
-    regions.sort(key=lambda region: (region['part'], -region['area']))
+    regions.sort(key=lambda region: (region['part'], region['offset'][1], region['offset'][0], -region['area']))
     return regions
 
 

@@ -478,6 +478,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     shaded = bool(regions) and bool(paint_motion.shaded_parts(regions, shade_rgb, len(names)))
     ramp = paint_motion.SHADE_RAMP if shaded else 0.
     paced = max(lines['all_at_cap'] + fill['minimum'] + ramp, (lines['required'] + fill['required'] + ramp) / line_drawing.VIDEO_LAPSE)
+    paced /= 1. - 1. / illustration_layers.SHARP
     paced += min(1.5, .136 * paced) if drawing.get('sketch') else 0.
     total = min(float(seconds), paced) if seconds else float(np.clip(paced, 1, 30))
     sketches = line_drawing.sketch_strokes(owners, alpha, len(names)) if drawing.get('sketch') else []
@@ -487,7 +488,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     # was first measured from the picture top, but the marker actually starts where the lines end, so give
     # the picture its measured minimum instead of compressing it. A window truly too small still
     # compresses the whole asset uniformly below.
-    for _ in range(2):
+    for attempt in range(3):
         tip = top_tip.copy()
         segments, cursor = [], 0.
         if sketches:
@@ -505,7 +506,9 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
                                  'points': stroke['points'].tolist(), 'lengths': stroke['weights'].tolist()})
                 cursor += length
             tip = sketches[-1]['points'][-1]
-        available = max(.1, total - cursor - ramp)
+        # The source ink settles locally after the nib passes. Reserve that edge ramp
+        # instead of accelerating the whole picture by 0.4% at the last frame.
+        available = max(.001, total - cursor - ramp - total / illustration_layers.SHARP)
         # Water-fill the time: silhouette + key lines, a basic fill, every line at the cap, a moderate fill, then human pace.
         line_budget, fill_budget, remaining = 0., 0., available
         steps = [(lines['minimum'], 0.), (0., fill['minimum']), (lines['all_at_cap'] - lines['minimum'], 0.),
@@ -525,6 +528,10 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         # The marker minimum must start where the lines end, not at the picture top: the storyboard gate
         # reads minimum_seconds, and the fill below begins its travel at this tip.
         fill_minimum = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS, shade=False)['minimum'] if regions else 0.
+        minimum_total = (lines['all_at_cap'] + fill_minimum + ramp) / (1. - 1. / illustration_layers.SHARP)
+        if attempt < 2 and total < minimum_total - 1e-6 and total < ceiling - 1e-6:
+            total = min(ceiling, minimum_total)
+            continue
         fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
         if regions:
             fill_segments, fill_parts, bands, _, tip, fill_counts = paint_motion.schedule(

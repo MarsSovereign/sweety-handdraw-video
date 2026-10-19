@@ -1,6 +1,6 @@
 # sweety-handdraw-video
 
-安装一个 Skill，按主题或文章制作完整手绘讲解视频。
+安装一个 Skill，按主题或文章制作完整手绘讲解视频。当前版本：v1.4.1。
 
 - 使用入口：[SKILL.md](SKILL.md)
 - 项目说明、安装与样片：[GitHub README](https://github.com/threerocks/sweety-handdraw-video)
@@ -10,6 +10,12 @@
 - 内置依赖和冲突处理：[依赖路由](references/dependencies.md)
 
 旁白以本地为主：已安装并明确配置的 VoxCPM2，或兼容的本机 VoiceStudio 服务；火山豆包、Gemini TTS 只在用户配置了自己的密钥并选择时使用；已核对的导出音频可以离线复用。音色目录与试听见[本地声音运行](references/local-runtime.md)。生成新图片还需宿主的图像工具（Claude Code 需接入生图工具 / MCP 或使用用户提供的插画）；Python、fontTools 与 FFmpeg 负责本地合成，图片隐私清理为纯 Python。支持 macOS 与 Linux，`scripts/setup.sh` 一次装好运行环境。内置的参考指南不需要另行安装为 Skills。
+
+### v1.4.1：发布入口与画面丰富度
+
+- 版本说明、固定下载链接、安装包与标签一致，提供整包与逐文件 SHA-256 校验。更新后读取本目录 `VERSION`，应为 `1.4.1`。
+- 密集画面声明焦点和至少两个有讲解作用的辅助元素，可以放在同一幅场景图内；主体过小会阻止生产构建，留白需有理由。
+- 构建报告记录实际页面内容范围、分镜警告；这些检查不替代看图验收。
 
 ### v1.4：原生选项、竖屏默认、导演密度
 

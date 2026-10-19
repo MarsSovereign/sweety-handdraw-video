@@ -29,14 +29,19 @@ class DrawingBudgetTests(unittest.TestCase):
             self.assertEqual(metadata['drawability']['drawn_stroke_count'], metadata['drawability']['stroke_count'])
             self.assertGreater(metadata['drawability']['minimum_seconds'], .2)
             self.assertLessEqual(metadata['seconds'], 40)
+            self.assertFalse(metadata['lines']['speed_over_cap'])
+            self.assertFalse(metadata['painting']['fill_over_cap'])
 
-    def test_a_window_too_small_still_compresses_instead_of_dropping_strokes(self):
+    def test_overbudget_asset_keeps_diagnostics_but_production_rejects_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stroke_assets.configure_assets(root, '/dev/null')
             metadata = self.picture(root, .7)
             self.assertEqual(metadata['drawability']['drawn_stroke_count'], metadata['drawability']['stroke_count'])
             self.assertGreater(metadata['time_compression'], 1)
+            from storyboard_lint import drawing_time
+            errors, _ = drawing_time({'pages': [{'events': [{'asset': 'budget', 'start': 0, 'end': .7, 'caption': False}]}], 'assets': {'budget': metadata}})
+            self.assertIn('exceeded its drawing budget', '\n'.join(errors))
 
 
 class EngineRecordTests(unittest.TestCase):

@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 from PIL import Image, ImageDraw
 from narration_master import script_text, sha256
-from storyboard_lint import MAX_DRAWING_SHARE, check_build, drawing_time, pen_busy_share, pen_time, plan, timing, usage
+from storyboard_lint import MAX_DRAWING_SHARE, check_build, drawing_time, pen_busy_share, pen_time, plan, timing, usage, finished_picture_hold_share
 from video_job import FilmBuilder, save_wave
 import test_style_and_plan as style_tests
 
@@ -135,6 +135,30 @@ class StoryboardTimingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Production requires a storyboard'):
             check_build('.', {'pages': []}, {'pages': [], 'assets': {}})
 
+    def test_blank_lead_in_and_closing_tail_are_not_picture_reading_time(self):
+        timeline = {'pages': [{'beats': [{'start': 1}], 'speech_end': 11, 'end': 16,
+            'events': [{'asset': 'figure', 'caption': False, 'image': ['figure.png', None], 'start': 5, 'end': 9, 'hide': 16}]}]}
+        self.assertAlmostEqual(pen_busy_share(timeline), .4)
+        self.assertAlmostEqual(finished_picture_hold_share(timeline), .2)
+
+    def test_diagram_is_complete_only_after_its_labels_are_finished(self):
+        timeline = {'pages': [{'beats': [{'start': 1}], 'speech_end': 11,
+            'events': [{'asset': 'arrow', 'visual': 'mechanism', 'caption': False, 'start': 1, 'end': 2},
+                       {'asset': 'label', 'visual': 'mechanism', 'caption': False, 'start': 3, 'end': 4}]}]}
+        board_doc = {'shots': [{'visuals': [{'id': 'mechanism', 'kind': 'diagram'}]}]}
+        self.assertAlmostEqual(finished_picture_hold_share(timeline, board_doc), .7)
+
+    def test_accumulating_board_can_reuse_the_scene_when_new_labels_are_added(self):
+        timed = beats(4, 4, 4)
+        board_doc = board([{'beats': ['b0', 'b1', 'b2'], 'type': 'closeup', 'board': 'main',
+                            'visuals': [picture('scene'), {'id': 'label1'}, {'id': 'label2'}]}],
+                          presentation={'mode': 'accumulating_board', 'reason': 'explain on one board'})
+        timeline = {'pages': [{'beats': timed, 'end': 14, 'events': [
+            {'asset': 'scene', 'image': ['scene.png', None], 'visual': 'scene', 'start': 1.5, 'end': 2.5, 'caption': False},
+            {'asset': 'label', 'visual': 'label1', 'start': 5.5, 'end': 6, 'caption': False},
+            {'asset': 'label', 'visual': 'label2', 'start': 9.5, 'end': 10, 'caption': False}]}], 'assets': {}}
+        self.assertEqual(timing(board_doc, timeline)[0], [])
+
 
 class StoryboardBuildTests(unittest.TestCase):
     def setUp(self):
@@ -188,6 +212,23 @@ class StoryboardBuildTests(unittest.TestCase):
         self.assertIn('leaf.png is not in the storyboard', errors)
         with self.assertRaisesRegex(ValueError, 'v2.*missing from job.json'):
             FilmBuilder(self.root).build()
+
+    def test_build_records_page_composition_and_production_rejects_tiny_pictures(self):
+        timeline = FilmBuilder(self.root).build()
+        composition = timeline['storyboard']['composition']
+        self.assertEqual(len(composition['pages']), 2)
+        self.assertFalse(composition['visual_acceptance_claimed'])
+        self.assertTrue(any('content extent' in warning for warning in timeline['storyboard']['warnings']))
+        with self.assertRaisesRegex(ValueError, 'visible picture extent'):
+            check_build(self.root, {**self.manifest, 'runtime_fixture': False}, timeline)
+
+    def test_shortest_picture_hold_warns_even_when_the_median_is_readable(self):
+        timeline = FilmBuilder(self.root).build()
+        events = {event.get('visual'): event for event in timeline['pages'][0]['events'] if not event['caption']}
+        events['v2']['start'] = events['v1']['end'] + .2
+        report = check_build(self.root, self.manifest, timeline)
+        self.assertGreater(report['stats']['finished_hold_median_seconds'], 1.)
+        self.assertTrue(any('below the 1.00s' in warning for warning in report['warnings']))
 
     def test_same_image_for_three_beats_stops_the_build(self):
         self.manifest['pages'][1]['beats'][0]['actions'][0]['source'] = 'icon.png'
@@ -266,6 +307,15 @@ class RecognizabilityTests(unittest.TestCase):
 
 
 
+def add_dense_composition(shots):
+    for shot in shots:
+        focus = next(visual['id'] for visual in shot['visuals'] if visual['kind'] == 'illustration')
+        shot['composition'] = {'layout': 'scene', 'focus': focus, 'context': [
+            {'visual': focus, 'element': 'vine', 'explains': 'shows where the fruit grows'},
+            {'visual': focus, 'element': 'basket', 'explains': 'shows the harvesting result'}]}
+    return shots
+
+
 class PresentationDensityTests(unittest.TestCase):
     def test_picture_book_rejects_multi_hero_shots(self):
         timed = beats(8, 8)
@@ -288,7 +338,10 @@ class PresentationDensityTests(unittest.TestCase):
             {'beats': ['b2'], 'type': 'key_points', 'board': 'main',
              'visuals': [picture('v2'), {'id': 't2', 'kind': 'text_group', 'subject': 'recap'}]},
         ]
-        report = plan(board(shots, presentation={'mode': 'accumulating_board', 'reason': '课堂板书累积'}, max_hold_seconds=12), timed)
+        layout = {'id': 'main', 'purpose': 'explain three related steps on one board', 'regions': [
+            {'id': f'row{index}', 'purpose': f'explain step {index}', 'box': [.05, .05 + index * .28, .95, .30 + index * .28],
+             'visuals': [visual['id'] for visual in shot['visuals']]} for index, shot in enumerate(shots)]}
+        report = plan(board(add_dense_composition(shots), boards=[layout], presentation={'mode': 'accumulating_board', 'reason': '课堂板书累积'}, max_hold_seconds=12), timed)
         self.assertEqual(report['stats']['presentation_mode'], 'accumulating_board')
         self.assertLessEqual(report['stats']['required_visuals'], 4)
         self.assertEqual(report['errors'], [])
@@ -297,7 +350,7 @@ class PresentationDensityTests(unittest.TestCase):
         timed = beats(12)
         shots = [{'beats': ['b0'], 'type': 'overview_recap',
                   'visuals': [picture('v0'), picture('v1'), picture('v2'), {'id': 't0', 'kind': 'text_group', 'subject': 'title'}]}]
-        report = plan(board(shots, presentation={'mode': 'dense_infographic', 'reason': '成人科普信息图'}), timed)
+        report = plan(board(add_dense_composition(shots), presentation={'mode': 'dense_infographic', 'reason': '成人科普信息图'}), timed)
         self.assertEqual(report['stats']['presentation_density'], 'dense')
         self.assertEqual(report['errors'], [])
 

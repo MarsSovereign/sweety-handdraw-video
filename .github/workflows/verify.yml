@@ -1,5 +1,12 @@
 name: Verify packaged skill
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -11,6 +18,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -25,6 +34,8 @@ jobs:
           "$PY" skills/sweety-handdraw-video/scripts/fonts.py --text 犇羴鱻龘囧槑
       - name: Verify integrity and regressions
         run: |
+          "$PY" tools/release.py check
+          "$PY" -m unittest discover -s tools -p 'test*.py' -v
           "$PY" skills/sweety-handdraw-video/scripts/validate_package.py
           "$PY" -m unittest discover -s skills/sweety-handdraw-video/scripts -p 'test*.py' -v
       - name: Exercise offline pipeline and package
