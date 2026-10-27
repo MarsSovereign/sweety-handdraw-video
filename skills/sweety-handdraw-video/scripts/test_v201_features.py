@@ -137,13 +137,15 @@ class PlanSizeTests(unittest.TestCase):
             line_drawing.plan_box(1000, 1440, {'plan_side': 100})
 
 
-def disc(size=200, hole=False, glow=False):
+def disc(size=200, hole=False, glow=False, gap=False):
     image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     if glow:  # a soft halo around the subject
         draw.ellipse((2, 2, size - 2, size - 2), fill=(250, 240, 180, 90))
     draw.ellipse((20, 20, size - 20, size - 20), fill=(60, 120, 200, 255), outline=(20, 20, 20, 255), width=5)
-    if hole:
+    if hole:  # a fill painted half-transparent, like the light rays of the rejected seabed
+        draw.ellipse((70, 70, 130, 130), fill=(240, 240, 230, 110))
+    if gap:   # a fully clear gap enclosed by the subject: background showing through, not a defect
         draw.ellipse((80, 80, 120, 120), fill=(0, 0, 0, 0))
     return image
 
@@ -155,6 +157,7 @@ class ImageGateTests(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertTrue(measures['transparent_background'])
         self.assertEqual([kind for kind, _ in image_gate.transparency(disc(hole=True))[0]], ['transparency_hole'])
+        self.assertEqual(image_gate.transparency(disc(gap=True))[0], [])   # a see-through gap is not a hole
         self.assertEqual([kind for kind, _ in image_gate.transparency(disc(glow=True))[0]], ['glow'])
         self.assertEqual(image_gate.transparency(Image.new('RGB', (50, 50), 'white'))[1], {'transparent_background': False})
 
@@ -284,6 +287,18 @@ class NewRecipeTests(unittest.TestCase):
             self.assertGreater((self.last_frame(result) > 0).mean(), .01, recipe)
         pour = web_motion.render(*cases[0][:2], 260, 300, 1.6, cache, fps=10)
         self.assertEqual(self.last_frame(pour)[:40].max(), 0)    # everything poured has landed by the end
+
+    def test_recipes_keep_their_layout_on_a_zoomed_board(self):
+        import web_motion
+        cache = Path(tempfile.mkdtemp())
+        for recipe, params in (('spin3d', {'shape': 'gem'}), ('physics', {'scene': 'pour', 'items': [{'size': 30, 'count': 4}], 'drop_ms': 300})):
+            boxes = []
+            for scale in (1., 1.35):
+                result = web_motion.render(recipe, params, 260, 260, 1.4, cache, fps=10, scale=scale)
+                self.assertFalse(result['clipped'], (recipe, scale))
+                box = Image.open(Path(result['directory']) / f'{result["frames"] - 1:05d}.png').getbbox()
+                boxes.append([value / scale for value in box])
+            self.assertLess(max(abs(a - b) for a, b in zip(*boxes)), 4, recipe)   # same place and size, only sharper
 
     def test_libraries_load_only_for_their_recipe_and_tex_errors_are_reported(self):
         import web_motion

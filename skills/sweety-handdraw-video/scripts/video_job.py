@@ -295,6 +295,21 @@ def moment(spec, page, beats, default):
     return page['start'] + float(at)
 
 
+def take_turns(titles, page):
+    """Titles that share a spot on screen take turns: one still showing when the next arrives finishes leaving first
+    (it fades out in the gap, or as late as its own entrance allows), so two titles never read as one line."""
+    titles = sorted(titles, key=lambda event: event['start'])
+    for number, earlier in enumerate(titles):
+        later = next((event for event in titles[number + 1:] if earlier['x'] < event['x'] + event['width'] and event['x'] < earlier['x'] + earlier['width']
+                      and earlier['y'] < event['y'] + event['height'] and event['y'] < earlier['y'] + earlier['height']), None)
+        leaving = earlier.get('exit') or {'style': 'fade', 'start': page['end'], 'end': page['end']}
+        if later is None or leaving['end'] <= later['start'] + 1e-6:
+            continue
+        seconds = max(leaving['end'] - leaving['start'], .3)
+        start = max(earlier['end'], later['start'] - seconds)
+        earlier['exit'] = {'style': leaving['style'], 'start': round(start, 3), 'end': round(start + seconds, 3)}
+
+
 def parallax_depth(spec):
     """An element's parallax depth: -1 (far, moves with the camera) .. 1 (near, moves twice as far as the page)."""
     depth = spec.get('depth')
@@ -568,6 +583,7 @@ class FilmBuilder:
                 event['gesture'] = [[round(value, 1) for value in point] for point in gesture_path(spec, event)]
                 event['gesture_seconds'] = gesture_seconds(spec, seconds)
             events.append(event)
+        take_turns([event for event in events if event['recipe'] == 'kinetic_title'], page)
         return events
 
     def caption_events(self, cues, keywords=None):
@@ -813,8 +829,20 @@ class FilmBuilder:
         from subtitle_contract import caption_clearance, validate_subtitles
         validate_subtitles(timeline)
         caption_clearance(timeline, self.work / 'assets')
+        # The pen never writes off screen: camera moves wait for the element being drawn, or a framing move is inserted.
+        import framing
+        timeline['framing'] = framing.keep_drawing_in_view(timeline)
+        for page in timeline['pages']:
+            validate_page_motion(page, {'width': self.width, 'height': self.height}, first=page is timeline['pages'][0])
         timeline['storyboard'] = check_build(self.root, self.manifest, timeline)
         timeline['storyboard']['warnings'] += self.caption_warnings
+        for item in timeline['framing']['adjustments']:
+            what = ', '.join(([f"moves waited {item['moves_waited_seconds']}s"] if 'moves_waited_seconds' in item else [])
+                             + ([f"framing move ({item['framing']}) at {item['framed_at']}s"] if 'framed_at' in item else []))
+            timeline['storyboard']['warnings'].append(f"page {item['page']}: {item['role']} {item['asset']} was drawn {item['overflow_px']}px outside the view; {what}")
+        for item in timeline['framing']['unfixable']:
+            timeline['storyboard']['warnings'].append(f"page {item['page']}: {item['role']} {item['asset']} is drawn {item['overflow_px']}px out of clear view at "
+                                                      f"{item['at']}s: {item['reason']}")
         # Pen and marker sounds follow the finished drawing schedule (audio.foley, on by default).
         from foley import attach as attach_foley
         attach_foley(self.root, timeline, self.manifest)

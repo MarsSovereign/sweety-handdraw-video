@@ -732,19 +732,20 @@
   //     axis: y|x, appear_ms, delay, ink, outline (px)}
   Recipes.spin3d = (root, p, ctx) => {
     if (!window.Zdog) throw new Error('spin3d needs Zdog (vendor/zdog.js)');
-    const W = ctx.width, H = ctx.height, scale = ctx.scale, TAU = Zdog.TAU;
+    const W = ctx.width, H = ctx.height, TAU = Zdog.TAU;
     const shape = p.shape || 'box', s = p.size || Math.min(W, H) * 0.5, line = p.outline ?? 4, inkColor = ink(p);
     const colors = p.colors || [PALETTE[0], '#C8603A', '#F4A47F'];
     const [main, side, top] = [colors[0], colors[1] || colors[0], colors[2] || colors[0]];
     // Two canvases, one model each: an ink silhouette below (every surface in ink, strokes thickened by the outline) and
     // the colours above (Zdog clears its canvas on every render, so the passes cannot share one).
     const build = (silhouette) => {
+      // Sized in CSS pixels: Zdog itself up-rezes by devicePixelRatio (the capture's board scale), so no extra zoom here.
       const canvas = document.createElement('canvas');
-      canvas.width = W * scale; canvas.height = H * scale;
+      canvas.width = W; canvas.height = H;
       Object.assign(canvas.style, { position: 'absolute', inset: '0', width: `${W}px`, height: `${H}px` });
       root.appendChild(canvas);
       const pen = (color) => (silhouette ? inkColor : color), grow = silhouette ? 2 * line : 0;
-      const scene = new Zdog.Illustration({ element: canvas, zoom: scale, resize: false, centered: true });
+      const scene = new Zdog.Illustration({ element: canvas, resize: false, centered: true });
       const body = new Zdog.Anchor({ addTo: scene });
       const face = (points, color, front) => new Zdog.Shape({ addTo: body, path: points, fill: true, stroke: 2 + grow, color: pen(color), front, backface: silhouette ? pen(color) : false });
       if (shape === 'box') {

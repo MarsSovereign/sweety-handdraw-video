@@ -13,7 +13,7 @@ TRANSITION_SECONDS = {'erase': (.6, 2.), 'page_turn': (.6, 1.8), 'marker_wipe': 
 TRANSITION_STYLES = {'erase': ('felt', 'rubber'), 'iris': ('round', 'blot')}
 WIPE_DIRECTIONS = ('left', 'right', 'up', 'down')
 MAX_ZOOM = 3.
-CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow', 'rotate', 'shake', 'move', 'impact', 'hop', 'subject'}
+CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow', 'rotate', 'shake', 'move', 'impact', 'hop', 'subject', 'auto'}
 
 
 def number(value):
@@ -55,6 +55,8 @@ def validate_page_motion(page, canvas, first=False):
                 raise ValueError('Camera rotate is within -20..20 degrees and shake within 0..20 px')
             if not number(key.get('seconds', .8)) or not 0 <= key.get('seconds', .8) <= 3:
                 raise ValueError('Camera move seconds must be within 0..3')
+            if key.get('auto', 'framing') != 'framing':
+                raise ValueError('Camera "auto" only marks a move the build inserted to keep drawing in view ("framing")')
             subject = key.get('subject')
             if move == 'dolly_zoom' and not subject:
                 raise ValueError('A dolly_zoom camera key needs "subject": the visual id that keeps its size while the page zooms')

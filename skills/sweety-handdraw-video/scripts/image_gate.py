@@ -4,8 +4,8 @@
     image_gate.py JOB inputs/art/i04-seabed.png [--visual v04-seabed] [--width 800]
 
 Runs in a few seconds, right after generation (before region marks, drawing review or build):
-- transparency: holes or a soft glow inside the subject (a transparent-background PNG whose interior is see-through draws
-  as blank paper, and a glow halo cannot be drawn with a pen);
+- transparency: half-transparent fills or a soft glow inside the subject (a fill painted see-through draws as a washed-out
+  patch, and a glow halo cannot be drawn with a pen); fully clear gaps such as the space between legs are fine;
 - line art: the same gate the build applies (texture, specks, too many crossings);
 - drawing time: the strokes and minimum seconds at the planned size, against the seconds the storyboard gives this
   visual (storyboard_lint.py --budget).
@@ -23,7 +23,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-HOLE_SHARE = .004      # see-through interior larger than this share of the subject is a hole
+HOLE_SHARE = .004      # half-transparent fill larger than this share of the subject is a hole
 GLOW_SHARE = .06       # semi-transparent pixels away from the edge larger than this share of the subject is a glow
 STROKE_MARGIN = .85    # aim the prompt at this share of the strokes that fit the window
 
@@ -36,14 +36,16 @@ def transparency(image):
     solid = alpha > 200
     filled = ndimage.binary_fill_holes(ndimage.binary_closing(solid, iterations=3))
     area = max(1, int(filled.sum()))
-    holes = filled & (alpha < 200)
+    # A fully clear gap enclosed by the subject (between legs, inside a frame or a ring) is background showing through and
+    # draws as paper, as it should. The defect is a fill painted half-transparent (light rays, haze, a see-through sea).
+    holes = filled & (alpha >= 8) & (alpha < 200)
     holes = ndimage.binary_opening(holes, iterations=2)
     edge = filled & ~ndimage.binary_erosion(filled, iterations=4)
     glow = (alpha > 20) & (alpha < 200) & ~edge & ~holes
     measures = {'transparent_background': True, 'hole_share': round(float(holes.sum()) / area, 4), 'glow_share': round(float(glow.sum()) / area, 4)}
     problems = []
     if measures['hole_share'] > HOLE_SHARE:
-        problems.append(('transparency_hole', f'{measures["hole_share"]:.1%} of the subject is see-through: it would draw as blank paper'))
+        problems.append(('transparency_hole', f'{measures["hole_share"]:.1%} of the subject is painted half-transparent: it would draw as a washed-out patch'))
     if measures['glow_share'] > GLOW_SHARE:
         problems.append(('glow', f'{measures["glow_share"]:.1%} of the subject is a soft semi-transparent glow, which a pen cannot draw'))
     return problems, measures

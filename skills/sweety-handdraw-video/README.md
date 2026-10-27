@@ -1,6 +1,6 @@
 # sweety-handdraw-video
 
-安装一个 Skill，按主题或文章制作完整手绘讲解视频。当前版本：v2.0.1。
+安装一个 Skill，按主题或文章制作完整手绘讲解视频。当前版本：v2.0.2。
 
 - 使用入口：[SKILL.md](SKILL.md)
 - 项目说明、安装与样片：[GitHub README](https://github.com/threerocks/sweety-handdraw-video)
@@ -10,6 +10,17 @@
 - 内置依赖和冲突处理：[依赖路由](references/dependencies.md)
 
 旁白以本地为主：已安装并明确配置的 VoxCPM2，或兼容的本机 VoiceStudio 服务；火山豆包、Gemini TTS 只在用户配置了自己的密钥并选择时使用；已核对的导出音频可以离线复用。音色目录与试听见[本地声音运行](references/local-runtime.md)。生成新图片还需宿主的图像工具（Claude Code 需接入生图工具 / MCP 或使用用户提供的插画）；Python、fontTools 与 FFmpeg 负责本地合成，图片隐私清理为纯 Python。支持 macOS 与 Linux，`scripts/setup.sh` 一次装好运行环境。内置的参考指南不需要另行安装为 Skills。
+
+### v2.0.2：笔不在画面外写字，句尾干净
+
+- **取景检查**（`scripts/framing.py`，build 自动运行）：
+  - 每个正在写或画的元素每 0.25 秒检查一次，板上动效检查它出场的过程，看是否在画面里、是否压到字幕。
+  - 不在画面里时，会试几种修法：镜头等笔写完再动，或补一个取景（平移一点、居中、拉远到两样都装下），保留整页效果最好的那个。笔在画面外写字最优先解决。
+  - 开页取景不再被推迟；后面的镜头仍按原来对应的台词时间走。
+  - 实在修不了的会在 build 警告里写明，留给版式处理。
+- **句尾**：每句按最后一个字后的静音定结尾，去掉模型多念出的声音，并统一淡出；句子被截断时判为失败并重新生成。`narration_master.py rebuild JOB` 用已有分段重新拼母带，不重新合成。
+- **大标题轮流出场**：同一位置的两条大标题，前一条先退场，不会被连读成一句。
+- 详见 [v2.0.2 发布记录](https://github.com/threerocks/sweety-handdraw-video/blob/main/docs/releases/v2.0.2.md)。更新后读取本目录 `VERSION`，应为 `2.0.2`。
 
 ### v2.0.1：纵深、物理、三维、公式和声音，画大不再画慢
 
@@ -22,7 +33,7 @@
   - 故事板检查认得写了 `visual` 的动效层；
   - 改镜头、转场或动效层时素材从缓存复用；
   - 自动镜头不再切掉已写好的标题。
-- 详见 [v2.0.1 发布记录](https://github.com/threerocks/sweety-handdraw-video/blob/main/docs/releases/v2.0.1.md)。更新后读取本目录 `VERSION`，应为 `2.0.1`。
+- 详见 [v2.0.1 发布记录](https://github.com/threerocks/sweety-handdraw-video/blob/main/docs/releases/v2.0.1.md)。
 
 ### v2.0.0：像人一样上色，镜头、转场和动效成体系（随 v2.0.1 首次公开）
 

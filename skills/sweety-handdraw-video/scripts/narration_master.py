@@ -29,6 +29,15 @@ EDGE_SECONDS = (.06, .1)
 # turn takes the human sentence pause; jobs may override per kind (join_pause_seconds).
 JOIN_PAUSE_SECONDS = {'clause': .2, 'sentence': .3, 'beat': .4, 'page': .6}
 END_TAIL_SECONDS = .3
+# Where a chunk really ends. The activity threshold alone cut 0.1 s after "speech", often through a breath or the
+# model's own after-sound, with no fade: listeners heard a tick or a clipped extra syllable at sentence ends.
+TAIL_QUIET_DB = -40.      # the last syllable has ended once the level stays this far under the chunk peak...
+TAIL_QUIET_SECONDS = .03  # ...for this long
+TAIL_BURST_DB = -30.      # a sound this loud after that quiet is not speech we asked for (an artifact after the sentence)
+TAIL_LOUD_DB = -25.       # a chunk that still ends this loud, with no quiet after its last word, was cut off
+TAIL_KEEP_SECONDS = .12   # natural decay and breath kept after the last syllable
+FADE_OUT_SECONDS = .05    # shortest raised-cosine fade at a cut, so no edge lands on a sound
+FADE_IN_SECONDS = .01
 
 
 def sha256(path):
@@ -122,6 +131,72 @@ def read_pcm(path):
         return np.frombuffer(stream.readframes(stream.getnframes()), dtype='<i2').astype(np.float64) / 32767
 
 
+def frame_levels(samples, rate=SAMPLE_RATE):
+    """Level of 20 ms frames every 10 ms, in dB under the chunk peak."""
+    hop, width = round(.01 * rate), round(.02 * rate)
+    if len(samples) < width:
+        return np.full(1, -120.)
+    peak = max(float(np.abs(samples).max()), 1e-9)
+    starts = np.arange(0, len(samples) - width + 1, hop)
+    energy = np.concatenate([[0.], np.cumsum(np.asarray(samples, float) ** 2)])
+    rms = np.sqrt(np.maximum(energy[starts + width] - energy[starts], 0.) / width)
+    return 20 * np.log10(np.maximum(rms, 1e-9) / peak)
+
+
+def speech_tail(samples, words=None, rate=SAMPLE_RATE):
+    """(cut seconds or None, report). The last syllable ends at the first quiet run after the last word starts; a burst
+    after that quiet is dropped; None when the chunk still ends loud with no quiet after its last word (cut off)."""
+    from align import speech_span
+    levels = frame_levels(samples, rate)
+    count = len(levels)
+    duration = len(samples) / rate
+    if words:
+        anchor = float(words[-1]['start'])
+    else:
+        anchor = max(0., speech_span(samples, rate)[1] - .4)
+    quiet = max(1, round(TAIL_QUIET_SECONDS / .01))
+    first = min(count - 1, max(0, int(anchor / .01)))
+    end_frame = None
+    for frame in range(first, count - quiet + 1):
+        if (levels[frame:frame + quiet] < TAIL_QUIET_DB).all():
+            end_frame = frame
+            break
+    if end_frame is None:
+        if levels[-3:].max() > TAIL_LOUD_DB:
+            return None, {'status': 'cut_off', 'final_level_db': round(float(levels[-3:].max()), 1)}
+        end_frame = first + int(np.argmin(levels[first:]))
+    speech_end = end_frame * .01 + .01
+    burst = next((frame for frame in range(end_frame + quiet, count) if levels[frame] > TAIL_BURST_DB), None)
+    cut = speech_end + TAIL_KEEP_SECONDS
+    if burst is not None:
+        cut = min(cut, burst * .01 - .01)
+    cut = min(max(cut, speech_end + .02), duration)
+    report = {'status': 'artifact_dropped' if burst is not None and burst * .01 < duration else 'clean', 'speech_end': round(speech_end, 3),
+              'cut': round(cut, 3), 'dropped_seconds': round(duration - cut, 3)}
+    return cut, report
+
+
+def finish_edges(samples, cut, speech_end, rate=SAMPLE_RATE):
+    """Cut at `cut` with a raised-cosine fade from the end of speech (at least FADE_OUT_SECONDS) and a short fade-in."""
+    samples = np.array(samples[:max(1, round(cut * rate))], float)
+    fade = max(round(FADE_OUT_SECONDS * rate), len(samples) - round(speech_end * rate))
+    fade = min(fade, len(samples))
+    if fade > 1:
+        samples[-fade:] *= .5 + .5 * np.cos(np.linspace(0, np.pi, fade))
+    lead = min(round(FADE_IN_SECONDS * rate), len(samples))
+    if lead > 1:
+        samples[:lead] *= .5 - .5 * np.cos(np.linspace(0, np.pi, lead))
+    return samples
+
+
+def clean_edges(samples, words=None, rate=SAMPLE_RATE):
+    """(samples ending cleanly after the last syllable, report); samples None when the chunk was cut off mid-sound."""
+    cut, report = speech_tail(samples, words, rate)
+    if cut is None:
+        return None, report
+    return finish_edges(samples, cut, report['speech_end'], rate), report
+
+
 def check_chunk(samples, text, path, asr):
     """Noise gate, speech rate and ASR coverage (asr: True = local ASR when installed, or a callable)."""
     from audio_gate import measure
@@ -155,13 +230,21 @@ def generate_chunk(synthesize, chunk, path, seed, asr):
             continue
         start, end = speech_span(audio)
         first = max(0, round((start - EDGE_SECONDS[0]) * SAMPLE_RATE))
-        audio = audio[first:round((end + EDGE_SECONDS[1]) * SAMPLE_RATE)]
+        # Keep a generous tail for now: where speech really ends is decided with the recognized words below.
+        audio = audio[first:round((end + .6) * SAMPLE_RATE)]
         write_pcm(path, audio)
         check = check_chunk(read_pcm(path), chunk['text'], path, asr)
         if timestamps and timestamps[0]:
             shift = first / SAMPLE_RATE
             check['words'] = [{**word, 'start': word['start'] - shift, 'end': word['end'] - shift} for word in timestamps[0]]
             check['timestamps'] = 'engine'
+        cleaned, tail = clean_edges(read_pcm(path), check.get('words'))
+        check['tail'] = tail
+        if cleaned is None:
+            check['failures'] = check['failures'] + [f"the chunk ends mid-sound ({tail['final_level_db']} dB): the last word is cut off"]
+            check['status'] = 'FAIL'
+        else:
+            write_pcm(path, cleaned)
         attempts.append({'seed': seed + attempt, **check})
         if check['status'] == 'PASS':
             return attempts
@@ -212,6 +295,11 @@ def build_master(root, manifest, synthesize, identity, options=None):
                       'attempts': attempts, 'sha256': sha256(path)}
             chunk_record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2))
         audio = read_pcm(path)
+        # Chunks made before the tail rule are cleaned here too: the master never inherits a hard cut or an after-sound.
+        audio, tail = clean_edges(audio, record['attempts'][-1].get('words'))
+        if audio is None:
+            raise ValueError(f"Chunk {index} ends mid-sound ({tail['final_level_db']} dB): regenerate it (delete {path.name} and its .json)")
+        record['tail'] = tail
         if chunk['join']:
             silence = max(0., joins[chunk['join']] - EDGE_SECONDS[0] - EDGE_SECONDS[1])
             master.append(np.zeros(round(silence * SAMPLE_RATE)))
@@ -219,7 +307,7 @@ def build_master(root, manifest, synthesize, identity, options=None):
         layout.append((chunk, cursor / SAMPLE_RATE, audio, record['attempts'][-1].get('words')))
         master.append(audio)
         cursor += len(audio)
-        records.append({**{key: record[key] for key in ('index', 'text', 'join', 'sha256')}, 'attempts': len(record['attempts'])})
+        records.append({**{key: record[key] for key in ('index', 'text', 'join', 'sha256')}, 'attempts': len(record['attempts']), 'tail': record['tail']})
     master.append(np.zeros(round(END_TAIL_SECONDS * SAMPLE_RATE)))
     samples = np.concatenate(master)
     gate = measure(samples, str(target))
@@ -314,3 +402,31 @@ def verify_compiled_master(root, timeline):
     if np.any(samples[:start]) or np.any(samples[start + report['samples']:]):
         raise ValueError('Cover and ending padding must not contain extra narration')
     return {'continuous_master': True, 'pcm_preserved': True, 'inserted_page_silence_seconds': 0}
+
+
+def rebuild_master(root):
+    """Re-join an existing master from its generated chunks under the current edge rules (no voice model needed).
+    Every chunk must still match its text, voice and seed; a chunk that would need generating stops the rebuild."""
+    root = Path(root).resolve()
+    manifest = json.loads((root / 'job.json').read_text())
+    target, _ = generation_target(root, manifest)
+    record = json.loads(target.with_suffix('.voice.json').read_text())
+
+    def synthesize(text, seed):
+        raise ValueError('A chunk no longer matches its text or voice; regenerate the narration with the voice tool: ' + text[:24])
+    options = {'seed': record['seed'], 'join_pause_seconds': record.get('join_pause_seconds', {}), 'asr': True}
+    alignment = (root / manifest.get('narration', {}).get('alignment', 'inputs/narration/alignment.json')).resolve()
+    if alignment.is_file() and json.loads(alignment.read_text()).get('method') != 'semantic_chunks':
+        alignment.replace(alignment.with_name(alignment.stem + '.before-rebuild.json'))
+    return build_master(root, manifest, synthesize, record['identity'], options)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['rebuild'])
+    parser.add_argument('job', type=Path)
+    arguments = parser.parse_args()
+    master, alignment = rebuild_master(arguments.job)
+    print(json.dumps({'master': str(master), 'alignment': str(alignment)}))
+
