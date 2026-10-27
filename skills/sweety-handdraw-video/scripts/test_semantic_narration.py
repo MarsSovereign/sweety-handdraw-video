@@ -107,6 +107,29 @@ class SemanticNarrationTests(unittest.TestCase):
         self.assertEqual(covers(script, '这类工具占了54%,速度快了3.5倍,2026年发布')['cer'] > 0, True)
         self.assertEqual(covers('增长了百分之四十五。', '增长了54%')['status'], 'fail')
 
+    def test_asr_homophones_of_rare_characters_pass_on_pinyin(self):
+        # Whisper transcript of a correctly read line (Jiang Xue): every error is a homophone.
+        line = '孤舟蓑笠翁，独钓寒江雪。只有一叶小船，一位披着蓑衣的老人，在大雪里独自垂钓。'
+        heard = '孤州梭利翁独吊寒江雪只有一夜小船一位披着梭伊的老人在大雪里独自垂吊'
+        try:
+            import pypinyin  # noqa: F401
+        except ImportError:
+            result = covers(line, heard)
+            self.assertEqual((result['status'], result['pinyin']), ('fail', 'unavailable'))
+            return
+        result = covers(line, heard)
+        self.assertEqual((result['status'], result['matched_by'], result['pinyin_cer']), ('pass', 'pinyin', 0.))
+        self.assertGreater(result['cer'], .15)
+        self.assertEqual(covers(line, heard, homophones=False)['status'], 'fail')
+        # Homophones do not excuse skipped words, babble or a different number.
+        self.assertEqual(covers(line, '孤州梭利翁独吊寒江雪只有一夜小船')['status'], 'fail')
+        self.assertEqual(covers(line, '孤州梭利翁独吊寒江雪只有一个大爷坐在船上睡觉打呼噜')['status'], 'fail')
+        self.assertEqual(covers('增长了百分之四十五。', '增长了54%')['status'], 'fail')
+        # A homophone the number normalizer reads as a numeral (牵牛 heard as 千牛) still passes.
+        moon = '月亮从东边的山后慢慢升起来，停在南斗和牵牛两组星宿之间。'
+        self.assertEqual(covers(moon, '月亮从东边的山后慢慢升起来停在南斗和千牛两组星宿之间')['status'], 'pass')
+        self.assertEqual(covers('他带了四十五个人。', '他带了54个人')['status'], 'fail')
+
     def test_whole_master_alignment_from_character_timestamps(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'master.wav'

@@ -125,13 +125,13 @@ def read_pcm(path):
 def check_chunk(samples, text, path, asr):
     """Noise gate, speech rate and ASR coverage (asr: True = local ASR when installed, or a callable)."""
     from audio_gate import measure
-    from align import speech_span, spoken, covers, transcribe
+    from align import speech_span, spoken_syllables, covers, transcribe
     start, end = speech_span(samples)
-    rate = len(spoken(text)) / max(.01, end - start)
-    result = {'gate': measure(samples, path.name, short_clip=True), 'chars_per_second': round(rate, 2)}
+    rate = spoken_syllables(text) / max(.01, end - start)
+    result = {'gate': measure(samples, path.name, short_clip=True), 'chars_per_second': round(rate, 2), 'rate_unit': 'syllables'}
     failures = list(result['gate']['failures'])
     if not SPEECH_RATE_RANGE[0] <= rate <= SPEECH_RATE_RANGE[1]:
-        failures.append(f'speech rate {rate:.2f} chars/s outside {SPEECH_RATE_RANGE}')
+        failures.append(f'speech rate {rate:.2f} syllables/s outside {SPEECH_RATE_RANGE}')
     words = (asr if callable(asr) else transcribe)(path) if asr else None
     if words:
         result['asr'] = covers(text, words['text'])
@@ -169,12 +169,16 @@ def generate_chunk(synthesize, chunk, path, seed, asr):
     raise ValueError(f"Chunk failed {GENERATION_ATTEMPTS} attempts: {chunk['text'][:24]}... " + json.dumps([item['failures'] for item in attempts], ensure_ascii=False))
 
 
-def chunk_alignment(layout):
-    """Beat ranges from chunk placement; caption cues inside each chunk from timestamps or pauses."""
+def chunk_alignment(layout, limit=None):
+    """Beat ranges from chunk placement; caption cues inside each chunk from timestamps or pauses.
+    limit (CJK characters per cue, caption_assets.cue_char_limit) packs clauses for the canvas; a clause longer than
+    the limit splits at word-aware positions only when the chunk has character timestamps to time the pieces."""
     from align import caption_texts, piece_ranges
     captions = {}
     for chunk, offset, audio, words in layout:
-        texts = [(unit['beat'], text) for unit in chunk['units'] for text in caption_texts(unit['text'])]
+        def cut(text):
+            return caption_texts(text, limit, split_long=bool(words)) if limit else caption_texts(text)
+        texts = [(unit['beat'], text) for unit in chunk['units'] for text in cut(unit['text'])]
         ranges, method = piece_ranges(audio, [text for _, text in texts], words)
         for (beat, text), (left, right) in zip(texts, ranges):
             captions.setdefault(beat, []).append((text, (offset + left, offset + right), method))
@@ -223,7 +227,8 @@ def build_master(root, manifest, synthesize, identity, options=None):
         raise ValueError('Joined narration master failed the audio gate: ' + '; '.join(gate['failures']))
     write_pcm(target, samples)
     from align import entry
-    captions, beats = chunk_alignment(layout), []
+    from caption_assets import cue_char_limit
+    captions, beats = chunk_alignment(layout, cue_char_limit(manifest)), []
     for page in manifest['pages']:
         for beat in page['beats']:
             items = captions[beat['id']]

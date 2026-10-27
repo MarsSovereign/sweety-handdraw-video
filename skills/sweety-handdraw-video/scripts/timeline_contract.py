@@ -4,8 +4,16 @@ import numpy as np
 from PIL import Image
 
 
-TRANSITIONS = ('slide', 'pan', 'cut', 'fade')
-CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow'}
+TRANSITIONS = ('slide', 'pan', 'cut', 'fade', 'wipe', 'zoom', 'erase', 'page_turn', 'slide_over', 'marker_wipe', 'ink_bleed', 'iris',
+               'card_flip', 'zoom_through', 'whip', 'push', 'paper_tear', 'brush_reveal', 'cube', 'shards', 'tiles', 'flash')
+TRANSITION_SECONDS = {'erase': (.6, 2.), 'page_turn': (.6, 1.8), 'marker_wipe': (.6, 1.6), 'ink_bleed': (.6, 1.6), 'iris': (.5, 1.4),
+                      'card_flip': (.5, 1.4), 'zoom_through': (.6, 1.6), 'whip': (.25, .7), 'paper_tear': (.7, 1.8),
+                      'brush_reveal': (.6, 1.6), 'cube': (.5, 1.4), 'shards': (.6, 1.6), 'tiles': (.6, 1.6),
+                      'flash': (.2, .7)}  # paper and ink need longer than a camera move
+TRANSITION_STYLES = {'erase': ('felt', 'rubber'), 'iris': ('round', 'blot')}
+WIPE_DIRECTIONS = ('left', 'right', 'up', 'down')
+MAX_ZOOM = 3.
+CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow', 'rotate', 'shake', 'move', 'impact', 'hop'}
 
 
 def number(value):
@@ -19,9 +27,15 @@ def validate_page_motion(page, canvas, first=False):
         if not isinstance(keys, list):
             raise ValueError('Page camera must be a list of keyframes')
         beats = {beat['id'] for beat in page.get('beats', [])}
+        from motion import CAMERA_MOVES, camera_key
         for key in keys:
             if not isinstance(key, dict) or set(key) - CAMERA_FIELDS:
-                raise ValueError('Camera keyframes accept only at/center/zoom/ease/seconds/follow')
+                raise ValueError('Camera keyframes accept only ' + '/'.join(sorted(CAMERA_FIELDS)))
+            if 'move' in key and key['move'] not in CAMERA_MOVES:
+                raise ValueError('Camera move is one of ' + ', '.join(CAMERA_MOVES))
+            key = camera_key(key)
+            if not number(key.get('impact', 0)) or not 0 <= key.get('impact', 0) <= 40 or not number(key.get('hop', 0)) or not 0 <= key.get('hop', 0) <= .6:
+                raise ValueError('Camera impact is within 0..40 px and hop within 0..0.6')
             at = key.get('at', 0)
             if isinstance(at, str):
                 if not at.startswith('beat:') or at[5:] not in beats:
@@ -32,20 +46,32 @@ def validate_page_motion(page, canvas, first=False):
             if not (isinstance(center, list) and len(center) == 2 and all(map(number, center))
                     and 0 <= center[0] <= canvas['width'] and 0 <= center[1] <= canvas['height']):
                 raise ValueError('Camera center must be [x, y] inside the canvas')
-            if not number(key.get('zoom', 1)) or not 1 <= key.get('zoom', 1) <= 1.3:
-                raise ValueError('Camera zoom must stay within 1.0..1.3')
-            if key.get('ease', 'inout') not in ('inout', 'linear') or not isinstance(key.get('follow', False), bool):
-                raise ValueError('Camera ease is inout/linear and follow is true/false')
+            if not number(key.get('zoom', 1)) or not 1 <= key.get('zoom', 1) <= MAX_ZOOM:
+                raise ValueError(f'Camera zoom must stay within 1.0..{MAX_ZOOM:g}')
+            from motion import EASINGS
+            if key.get('ease', 'inout') not in EASINGS + ('inout',) or not isinstance(key.get('follow', False), bool):
+                raise ValueError(f'Camera ease is one of {", ".join(EASINGS)} and follow is true/false')
+            if not number(key.get('rotate', 0)) or not -20 <= key.get('rotate', 0) <= 20 or not number(key.get('shake', 0)) or not 0 <= key.get('shake', 0) <= 20:
+                raise ValueError('Camera rotate is within -20..20 degrees and shake within 0..20 px')
             if not number(key.get('seconds', .8)) or not 0 <= key.get('seconds', .8) <= 3:
                 raise ValueError('Camera move seconds must be within 0..3')
     if transition is not None:
         if first:
             raise ValueError('pages[].transition describes the move into a page; the first page has none')
-        if not isinstance(transition, dict) or transition.get('type') not in TRANSITIONS or set(transition) - {'type', 'seconds'}:
-            raise ValueError('Transition must be {"type": slide|pan|cut|fade, "seconds": 0.3..1.0}')
-        seconds = transition.get('seconds', .6)
-        if transition['type'] != 'cut' and (not number(seconds) or not .3 <= seconds <= 1):
-            raise ValueError('Transition seconds must be within 0.3..1.0')
+        if not isinstance(transition, dict) or transition.get('type') not in TRANSITIONS or set(transition) - {'type', 'seconds', 'direction', 'target', 'color', 'angle', 'style'}:
+            raise ValueError('Transition must be {"type": ' + '|'.join(TRANSITIONS) + ', "seconds": ..., optional direction/target/color/angle/style}')
+        if 'style' in transition and transition['style'] not in TRANSITION_STYLES.get(transition['type'], ()):
+            raise ValueError(f'{transition["type"]} transition style is one of {", ".join(TRANSITION_STYLES.get(transition["type"], ())) or "(none)"}')
+        target = transition.get('target')
+        if target is not None and not (isinstance(target, list) and len(target) == 2 and all(map(number, target))
+                                       and 0 <= target[0] <= canvas['width'] and 0 <= target[1] <= canvas['height']):
+            raise ValueError('Transition target is a screen point [x, y] inside the canvas')
+        low, high = TRANSITION_SECONDS.get(transition['type'], (.3, 1.))
+        seconds = transition.get('seconds', max(low, .6))
+        if transition['type'] != 'cut' and (not number(seconds) or not low <= seconds <= high):
+            raise ValueError(f'{transition["type"]} transition seconds must be within {low:g}..{high:g}')
+        if transition.get('direction', 'left') not in WIPE_DIRECTIONS:
+            raise ValueError('Wipe direction is left, right, up or down')
     return True
 
 

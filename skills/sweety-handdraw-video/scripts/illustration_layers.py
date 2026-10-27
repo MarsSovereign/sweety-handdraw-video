@@ -1,11 +1,16 @@
 """Frame composition of a drawn illustration (shared by the renderer, the builder and the metrics):
-paper <- paint (flat marker color, revealed by the moving marker) <- shade (source paint, soft broad strokes)
+paper <- paint (flat marker color: a streaky wet coat where the marker passes, settling solid) <- shade (source paint, soft broad strokes)
 <- sketch (light construction lines, faded after inking) <- line layer (revealed exactly where the nib passed)."""
 from pathlib import Path
 import numpy as np
 from PIL import Image
 
 SHARP = 250.   # reveal ramp of a nib or marker edge, in fractions of the event
+
+
+def ramp(start, length):
+    """Length of a ramp that starts at `start`, shortened so it is complete by the end of the event (fraction 1)."""
+    return np.maximum(np.minimum(length, 1 - start), 1e-6)
 
 
 def over(top_rgb, top_alpha, rgb, alpha):
@@ -22,7 +27,8 @@ def prepare(maps, line, paint, shade, sketch=None):
               'alpha': shade[..., 3], 'ink': np.asarray(maps['ink'], np.float32),
               'color': np.asarray(maps['color'], np.float32), 'cover': np.asarray(maps['color_cover'], np.float32),
               'full': np.asarray(maps['color_full'], np.float32), 'shade': np.asarray(maps['shade'], np.float32),
-              'shade_ramp': float(maps['shade_ramp'])}
+              'shade_ramp': float(maps['shade_ramp']),
+              'paint_ramps': tuple(float(value) for value in maps['paint_ramps']) if 'paint_ramps' in maps else (0., 0.)}
     if sketch is not None:
         sketch = as_float(sketch)
         layers.update(sketch_rgb=sketch[..., :3], sketch_alpha=sketch[..., 3], sketch=np.asarray(maps['sketch'], np.float32),
@@ -31,7 +37,9 @@ def prepare(maps, line, paint, shade, sketch=None):
     finite = lambda values: np.where(np.isfinite(values), values, -np.inf)
     times = [layers['ink'], layers['color']] + ([layers['sketch']] if sketch is not None else [])
     layers['start'] = np.minimum.reduce(times)
-    settle = [finite(layers['ink'] + 1 / SHARP), finite(layers['full']), finite(layers['shade'] + layers['shade_ramp'])]
+    settle = [finite(layers['ink'] + 1 / SHARP), finite(layers['full'] + ramp(layers['full'], layers['paint_ramps'][1])),
+              finite(layers['color'] + ramp(layers['color'], layers['paint_ramps'][0])),
+              finite(layers['shade'] + layers['shade_ramp'])]
     if sketch is not None:
         settle.append(np.where(np.isfinite(layers['sketch']), sum(layers['sketch_fade']), -np.inf).astype(np.float32))
     layers['settle'] = np.maximum.reduce(settle)
@@ -50,7 +58,12 @@ def load(directory, name):
 def blend(layers, progress, where=Ellipsis):
     """RGBA uint8 of the selected pixels at this fraction of the drawing event."""
     pick = lambda key: layers[key][where]
-    paint = np.where(progress >= pick('full'), 1., np.where(progress >= pick('color'), pick('cover'), 0.)) * pick('alpha')
+    front, coat = layers['paint_ramps']
+    color, full = pick('color'), pick('full')
+    # A fresh coat comes in over a frame or two at its streaky strength, then settles to solid (always by the end).
+    wet = pick('cover') * (np.clip((progress - color) / ramp(color, front), 0, 1) if front > 0 else (progress >= color))
+    dry = np.clip((progress - full) / ramp(full, coat), 0, 1) if coat > 0 else (progress >= full)
+    paint = (wet + (1 - wet) * dry) * pick('alpha')
     mix = np.clip((progress - pick('shade')) / layers['shade_ramp'], 0, 1)[..., None]
     flat = pick('flat')
     rgb, alpha = flat + (pick('shade_rgb') - flat) * mix, paint.astype(np.float32)

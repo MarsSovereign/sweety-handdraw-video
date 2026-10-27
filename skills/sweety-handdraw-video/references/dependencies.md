@@ -1,6 +1,6 @@
 # 内置依赖与统一路由
 
-只安装 `sweety-handdraw-video`。五项依赖随包提供，固定来源版本与文件哈希，运行不自动更新上游。指南统一命名 `GUIDE.md`，不向 Skills 安装器暴露额外入口。原目录结构、许可证和第三方调用资源保留；只移除花叔仓库的宣传展示图片/GIF 与 omniailab 导演的 `examples/motion`、`examples/images` 宣传示例（`omitted_showcase_media` 列出全部路径），方法文档和实现资源仍在。变更清单见 `dependencies/vendor-manifest.json`，来源见 `dependencies/lock.json`。
+只安装 `sweety-handdraw-video`。五项依赖随包提供，固定来源版本与文件哈希，运行不自动更新上游。指南统一命名 `GUIDE.md`，不向 Skills 安装器暴露额外入口。原目录结构、许可证和第三方调用资源保留；只移除花叔仓库的宣传展示图片/GIF 与 omniailab 导演的 `examples/motion`、`examples/images` 宣传示例（`omitted_showcase_media` 列出全部路径），方法文档和实现资源仍在。花叔的卡通形象与角色帧（`demos/_shared/hero/`、`demos/long_scroll/frames/`、`assets/角色/` 及含该形象的两张总览图）按上游声明只供其示范、不在 MIT 授权内，因此不随包分发（`omitted_restricted_artwork` 列出全部路径）；用到这些帧的示范片需自备角色。变更清单见 `dependencies/vendor-manifest.json`，来源见 `dependencies/lock.json`。
 
 | 依赖与入口 | 本流程职责 | 加载时机 |
 |---|---|---|

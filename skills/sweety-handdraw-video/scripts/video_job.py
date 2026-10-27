@@ -14,7 +14,7 @@ from PIL import Image
 import stroke_assets
 from hand_assets import prepare_hand
 from art_direction import verify_art_direction
-from caption_assets import build_caption, resolve_cues
+from caption_assets import build_caption, caption_position, caption_safe_violations, resolve_cues
 from watermark_assets import prepare_watermark
 from narration_master import load_master
 from audio_contract import resolve_audio_layers, validate_ending
@@ -86,6 +86,7 @@ def inspect_environment(job_directory):
     for page in manifest['pages']:
         for group in page.get('visual_groups', []):
             inputs.extend(action.get('source') for action in group['actions'] if action['type']=='illustration')
+    inputs.extend(page.get('background') for page in manifest['pages'] if page.get('background'))
     if manifest.get('hand', {}).get('source'):
         inputs.append(manifest['hand']['source'])
     for value in inputs + audio:
@@ -160,12 +161,119 @@ def subtitle_time(seconds):
     return f'{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}'
 
 
+def anchor_point(spec):
+    """Rough center of an action in screen pixels (pen travel between elements)."""
+    if spec.get('points'):
+        return np.asarray(spec['points'], float).mean(0)
+    return np.array([float(spec['x']) + float(spec.get('width', spec.get('size', 60))) / 2,
+                     float(spec['y']) + float(spec.get('height', spec.get('size', 60))) / 2])
+
+
+def expand_actions(specs):
+    """Composite actions become the drawn primitives a presenter would draw in order. bar_chart: the axes as one pen
+    line, then each bar colored up from the base with its value written above it, category labels last."""
+    result = []
+    for spec in specs:
+        if spec['type'] != 'bar_chart':
+            result.append(spec)
+            continue
+        values = [float(value) for value in spec['values']]
+        labels = [str(label) for label in spec.get('labels', [])]
+        if not values or (labels and len(labels) != len(values)) or min(values) < 0:
+            raise ValueError('bar_chart needs nonnegative values and one label per value')
+        x, y, width, height = (float(spec[key]) for key in ('x', 'y', 'width', 'height'))
+        label_size = int(spec.get('label_size', max(24, round(height * .08))))
+        value_size = int(spec.get('value_size', label_size))
+        top = max(values + [float(spec.get('max', 0))]) or 1.
+        plot_top, plot_bottom = y + value_size * 1.4, y + height - (label_size * 1.5 if labels else 0)
+        slot = width / len(values)
+        bar_width = slot * float(spec.get('bar_ratio', .6))
+        weight = float(spec.get('weight', 4))
+        common = {key: spec[key] for key in ('visual', 'z') if key in spec}
+        first = {'from_beat': spec['from_beat']} if spec.get('from_beat') is not None else {}
+        result.append({'type': 'line', 'points': [[x, plot_top - value_size * .3], [x, plot_bottom], [x + width, plot_bottom]],
+                       'line_width': spec.get('axis_width', 4), 'color': spec.get('axis_color', '#302C26'), 'weight': weight * .15, **common, **first})
+        color = spec.get('color', '#E9784E')
+        colors = spec.get('colors') or [color] * len(values)
+        fmt = spec.get('value_format', '{:g}')
+        for index, value in enumerate(values):
+            bar_height = max(4., (plot_bottom - plot_top) * value / top)
+            left = x + slot * index + (slot - bar_width) / 2
+            result.append({'type': 'marker', 'style': 'bar', 'x': round(left), 'y': round(plot_bottom - bar_height - 2), 'width': max(8, round(bar_width)),
+                           'height': max(6, round(bar_height)), 'color': colors[index], 'z': 20, 'weight': weight * .5 / len(values), **common})
+            if spec.get('show_values', True):
+                text = fmt.format(value) + str(spec.get('unit', ''))
+                result.append({'type': 'text', 'text': text, 'size': value_size, 'x': round(left + bar_width / 2 - value_size * .3 * len(text)),
+                               'y': round(plot_bottom - bar_height - value_size * 1.35), 'color': spec.get('value_color', '#302C26'),
+                               'weight': weight * .2 / len(values), **common})
+        for index, label in enumerate(labels):
+            center = x + slot * (index + .5)
+            result.append({'type': 'text', 'text': label, 'size': label_size, 'x': round(center - label_size * .5 * len(label)),
+                           'y': round(plot_bottom + label_size * .25), 'color': spec.get('label_color', '#302C26'),
+                           'weight': weight * .15 / len(labels), **common})
+    return result
+
+
+def page_scale(page_spec):
+    """Board resolution of a page: the largest camera zoom on it, so every close-up is a sharp crop (1..3)."""
+    zooms = [float(key.get('zoom', 1)) for key in page_spec.get('camera') or []]
+    scale = float((page_spec.get('board') or {}).get('scale', max([1.] + zooms)))
+    if not 1 <= scale <= 3:
+        raise ValueError('Page board scale must be within 1..3')
+    return round(scale, 3)
+
+
+def moment(spec, page, beats, default):
+    """Film time named by "at": "beat:<id>" (+ offset) on this page, seconds from the page start, or default."""
+    at = spec.get('at')
+    if at is None:
+        return default + float(spec.get('offset', 0.))
+    if isinstance(at, str):
+        beat_id = at[5:] if at.startswith('beat:') else at
+        if beat_id not in beats:
+            raise ValueError(f'"at" names a sentence that is not on this page: {at}')
+        return beats[beat_id]['start'] + float(spec.get('offset', .15))
+    return page['start'] + float(at)
+
+
+def resolve_motions(spec, event, page, beats, parts=()):
+    """Motion presets of an element in film time (motion.py): `motion` entries and legacy `emphasis` ones.
+    Emphasis and puppet moves wait for the last stroke; idle loops start when the element is finished (or later at
+    "at") and repeat until the page turns; exits play at "at"."""
+    import motion
+    effects = []
+    for effect in list(spec.get('emphasis') or []) + list(spec.get('motion') or []):
+        kind = effect.get('type')
+        if kind not in motion.TYPES:
+            raise ValueError(f'Motion type must be one of {sorted(motion.TYPES)}')
+        start = moment(effect, page, beats, event['end'] + .05)
+        seconds = float(effect.get('seconds', motion.TYPES[kind]))
+        if not (math.isfinite(start) and .2 <= seconds <= 8):
+            raise ValueError('Motion seconds must be within 0.2..8')
+        if kind not in motion.EXIT and start < event['end'] - 1e-6:
+            # The element is still being drawn when its sentence comes: play the move right after the last stroke.
+            start = event['end'] + .1
+        entry = {'type': kind, 'start': round(start, 3), 'end': round(start + seconds, 3), 'strength': float(effect.get('strength', 1.))}
+        if kind in motion.PUPPET:
+            if effect.get('part') not in parts:
+                raise ValueError(f'{kind} needs "part": one of this picture\'s parts {list(parts)}')
+            entry.update(part=parts.index(effect['part']), side=effect.get('side', 'right'))
+        effects.append(entry)
+    return effects
+
+
 def drawn_seconds(metadata, seconds):
     """How long an asset actually draws: pictures and stroke-order text stop at video pace, others use their window."""
     if metadata.get('type') == 'illustration':
         return float(metadata['seconds'])
     if metadata.get('handwriting', {}).get('mode') == 'stroke_order':
         return float(metadata['handwriting']['seconds'])
+    if metadata.get('type') == 'line':
+        # A confident pen line: about 1100 px/s plus a short lift per barb, never stretched over a long window.
+        ink = [segment for segment in metadata['segments'] if segment['kind'] == 'ink']
+        return min(seconds, max(.3, sum(segment['lengths'][-1] for segment in ink) / 1100 + .08 * len(ink)))
+    if metadata.get('type') == 'counter':
+        return min(seconds, 1.4)
     return seconds
 
 
@@ -198,6 +306,9 @@ class FilmBuilder:
         self.assets = {}
         self.next_asset = 0
         self.seen_beat_ids = set()
+        self.caption_warnings = []
+        import direction
+        self.direction = direction.options(self.manifest)
 
     @staticmethod
     def action_weight(action):
@@ -208,6 +319,13 @@ class FilmBuilder:
 
     @staticmethod
     def minimum_seconds(action):
+        # A chart bar, a pen line and a counting number need a moment to read as motion, not a flash.
+        if action['type'] == 'marker' and action.get('style') == 'bar':
+            return .5
+        if action['type'] in ('line', 'arrow'):
+            return .3
+        if action['type'] == 'counter':
+            return .8
         # Readers need about 0.3 s per hanzi to see the stroke order; Latin and punctuation write faster.
         if action['type'] != 'text':
             return 0.
@@ -216,54 +334,116 @@ class FilmBuilder:
     @staticmethod
     def travel_gap(first, second, minimum):
         # Lift-and-move time grows with distance so the pen never teleports between elements.
-        anchors = [np.array([float(spec['x']) + float(spec.get('width', spec.get('size', 60))) / 2,
-                             float(spec['y']) + float(spec.get('height', spec.get('size', 60))) / 2]) for spec in (first, second)]
+        anchors = [anchor_point(spec) for spec in (first, second)]
         return float(np.clip(np.linalg.norm(anchors[1] - anchors[0]) / 1600, max(minimum, .12), .45))
 
-    def create_asset(self, action, seconds=None):
+    def create_asset(self, action, seconds=None, scale=1.):
+        """Build one element at its page's board resolution (scale > 1 when the camera zooms into the page);
+        positions stay in screen units."""
         self.next_asset += 1
         name = f'element-{self.next_asset:04d}'
         kind = action['type']
+        x, y = action.get('x'), action.get('y')
         if kind == 'text':
             text = str(action['text'])
             if not text.strip() or '\n' in text:
                 raise ValueError('Each text action must contain one nonempty line')
-            metadata = stroke_assets.build_text(name, text, int(action.get('size', 60)), action.get('color', '#302C26'), seconds=seconds,
+            metadata = stroke_assets.build_text(name, text, round(int(action.get('size', 60)) * scale), action.get('color', '#302C26'), seconds=seconds,
                                                 stroke_order=bool(action.get('stroke_order', True)))
         elif kind == 'marker':
-            metadata = stroke_assets.build_brush(name, int(action['width']), int(action['height']),
-                action.get('color', '#EAC958'), action.get('style', 'highlight'), action.get('line_width'), seconds=seconds)
+            line_width = action.get('line_width')
+            metadata = stroke_assets.build_brush(name, round(int(action['width']) * scale), round(int(action['height']) * scale),
+                action.get('color', '#EAC958'), action.get('style', 'highlight'), line_width * scale if line_width else None, seconds=seconds)
         elif kind == 'illustration':
             source = resolve_input(self.root, action['source'])
             optional = lambda key: resolve_input(self.root, action[key]) if action.get(key) else None
             drawing = {**self.manifest.get('drawing', {}), **action.get('drawing', {})}
             if drawing.get('mode') == 'reveal' and self.art_direction.get('style', {}).get('drawing_mode') == 'draw':
                 raise ValueError(f'{action["source"]}: this film is drawn; one picture cannot switch to reveal. Simplify or regenerate it so it can be drawn')
-            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']), action.get('crop'), action.get('parts'),
-                optional('outline_mask'), seconds=seconds, region_map_path=optional('region_map'), part_regions=action.get('part_regions'),
-                lineart_exception=action.get('lineart_exception'), drawing=drawing)
+            # Plan strokes and timing at the layout size; render the pixels at the page's board resolution.
+            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']),
+                action.get('crop'), action.get('parts'), optional('outline_mask'), seconds=seconds, region_map_path=optional('region_map'),
+                part_regions=action.get('part_regions'), lineart_exception=action.get('lineart_exception'), drawing=drawing)
+            if scale > 1.001:
+                metadata = stroke_assets.render_at(name, source, scale, action.get('crop'), None if drawing.get('mode') == 'reveal' else optional('outline_mask'))
+        elif kind in ('line', 'arrow'):
+            points = np.asarray(action['points'], float)
+            if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
+                raise ValueError('A line needs "points": [[x, y], [x, y], ...] in screen pixels')
+            metadata = stroke_assets.build_line(name, points * scale, float(action.get('line_width', 5)) * scale, action.get('color', '#302C26'),
+                                                action.get('head', 'end' if kind == 'arrow' else 'none'), float(action.get('curve', 0)))
+            x, y = metadata['offset'][0] / scale, metadata['offset'][1] / scale
+        elif kind == 'counter':
+            metadata = stroke_assets.build_counter(name, action.get('from', 0), action['to'], self.font_path, round(int(action.get('size', 72)) * scale),
+                                                   action.get('color', '#302C26'), action.get('decimals', 0), action.get('prefix', ''), action.get('suffix', ''),
+                                                   self.font_index)
         else:
             raise ValueError(f'Unsupported action type: {kind}')
         self.assets[name] = metadata
-        x, y = int(action['x']), int(action['y'])
-        if not (0 <= x and 0 <= y and x + metadata['width'] <= self.width and y + metadata['height'] <= self.height):
+        x, y = float(x), float(y)
+        if kind not in ('line', 'arrow'):
+            x, y = int(x), int(y)
+        if not (0 <= x and 0 <= y and x + metadata['width'] / scale <= self.width + .5 and y + metadata['height'] / scale <= self.height + .5):
             raise ValueError(f'Element is outside canvas: {action}')
-        return {'asset': name, 'x': x, 'y': y, 'weight': self.action_weight(action),
-                'z': int(action.get('z', 10 if kind == 'marker' and action.get('style', 'highlight') == 'highlight' else 30)),
-                'role': kind}
+        event = {'asset': name, 'x': x, 'y': y, 'weight': self.action_weight(action),
+                 'z': int(action.get('z', 10 if kind == 'marker' and action.get('style', 'highlight') == 'highlight' else 30)),
+                 'role': kind}
+        if scale != 1.:
+            event['scale'] = scale
+        if kind == 'counter':
+            event['pen'] = False
+        return event
 
-    def caption_events(self, cues):
+    def overlay_events(self, page_spec, page, scale):
+        """Web motion layers of a page (web_motion.py): rendered once to cached transparent frames, timed to its
+        sentences. space "board" moves with the page camera, "screen" stays put (titles, lower thirds)."""
+        import web_motion
+        events = []
+        beats = {beat['id']: beat for beat in page['beats']}
+        for index, spec in enumerate(page_spec.get('overlays') or []):
+            space = spec.get('space', 'board')
+            if space not in ('board', 'screen'):
+                raise ValueError('Overlay space is board or screen')
+            x, y, width, height = (float(spec[key]) for key in ('x', 'y', 'width', 'height'))
+            if x < 0 or y < 0 or x + width > self.width + .5 or y + height > self.height + .5:
+                raise ValueError(f'Overlay {spec.get("recipe")} lies outside the canvas')
+            seconds = float(spec.get('seconds', 1.5))
+            start = moment(spec, page, beats, page['start'] + .5)
+            board = scale if space == 'board' else 1.
+            render = web_motion.render(spec['recipe'], spec.get('params', {}), width, height, seconds, self.work / 'web-motion',
+                                       self.fps, board, int(spec.get('seed', 1 + index)))
+            if render.get('clipped') and not spec.get('bleed'):
+                raise ValueError(f'Overlay {spec["recipe"]} on page {page["index"] + 1} is cut off at the edge of its {width:g}x{height:g} box: '
+                                 'enlarge width/height or shrink the content (titles shrink to fit automatically); set "bleed": true only '
+                                 'for content meant to run off the edge')
+            event = {'recipe': spec['recipe'], 'space': space, 'x': x, 'y': y, 'width': width, 'height': height, 'scale': board,
+                     'start': round(start, 3), 'end': round(start + seconds, 3), 'frames': render['directory'], 'count': render['frames'],
+                     'z': int(spec.get('z', 60))}
+            if spec.get('exit'):
+                exit_spec = spec['exit']
+                exit_start = moment(exit_spec, page, beats, page['end'] - .5)
+                event['exit'] = {'style': exit_spec.get('style', 'fade'), 'start': round(exit_start, 3),
+                                 'end': round(exit_start + float(exit_spec.get('seconds', .35)), 3)}
+            if event['end'] > page['end'] + 1e-6 or event['start'] < page['start'] - 1e-6:
+                raise ValueError(f'Overlay {spec["recipe"]} must play within its page ({page["start"]:.2f}-{page["end"]:.2f}s)')
+            events.append(event)
+        return events
+
+    def caption_events(self, cues, keywords=None):
+        """Typeset captions placed above the phone's bottom UI (caption_assets.caption_position); a hand-set position
+        that a platform would cover is reported, not silently kept."""
         options = self.manifest.get('captions', {})
         events = []
         for cue in cues:
             self.next_asset += 1
             name = f'element-{self.next_asset:04d}'
-            metadata = build_caption(self.work / 'assets', name, cue['text'], options, self.width, self.height)
+            metadata = build_caption(self.work / 'assets', name, cue['text'], options, self.width, self.height, keywords=keywords)
             self.assets[name] = metadata
-            x = (self.width - metadata['width']) // 2
-            y = self.height - metadata['height'] - int(options.get('bottom_margin', round(self.height * .04)))
-            if min(x, y) < 0 or y + metadata['height'] > self.height:
-                raise ValueError('Caption lies outside the canvas')
+            x, y = caption_position(metadata, options, self.width, self.height)
+            for problem in caption_safe_violations((x, y, metadata['width'], metadata['height']), self.width, self.height):
+                warning = f'captions: {problem}'
+                if warning not in self.caption_warnings:
+                    self.caption_warnings.append(warning)
             events.append({'asset': name, 'x': x, 'y': y, 'role': 'caption', 'caption': True, 'z': 91,
                            'start': cue['start'], 'end': cue['end'], 'hide': cue['end']})
         return events
@@ -288,6 +468,21 @@ class FilmBuilder:
                 raise ValueError('Each page requires narration beats')
             page = {'index': page_index, 'start': cursor, 'beats': [], 'events': [],
                     'camera': page_spec.get('camera'), 'transition': page_spec.get('transition')}
+            import direction
+            auto_camera = self.direction['camera'] == 'auto' and not page_spec.get('camera') and not self.manifest.get('runtime_fixture')
+            scale = max(page_scale(page_spec), direction.AUTO_ZOOM) if auto_camera else page_scale(page_spec)
+            if page_index and not page['transition'] and self.direction['transitions'] == 'auto' and not self.manifest.get('runtime_fixture'):
+                page['transition'] = direction.auto_transition(page_index, page_spec, (pages[-1].get('transition') or {}).get('type'))
+                page['auto'] = page.get('auto', []) + ['transition']
+            if page_spec.get('handheld'):
+                page['handheld'] = float(page_spec['handheld'])
+            if scale != 1.:
+                page['scale'] = scale
+            if page_spec.get('background'):
+                background_path = resolve_input(self.root, page_spec['background'])
+                if not background_path.is_file():
+                    raise ValueError(f'Page {page_index} background image is missing: {page_spec["background"]}')
+                page['background'] = str(background_path)
             for beat_index, beat_spec in enumerate(page_spec['beats']):
                 beat_id = beat_spec.get('id', f'p{page_index:02d}-b{beat_index:02d}')
                 if not re.fullmatch(r'[A-Za-z0-9_-]+', beat_id) or beat_id in self.seen_beat_ids:
@@ -312,7 +507,7 @@ class FilmBuilder:
                 if cue_source.get('caption_cues'):
                     beat['caption_cues'] = cue_source['caption_cues']
                 beat_cues = resolve_cues(beat)
-                page['events'].extend(self.caption_events(beat_cues))
+                page['events'].extend(self.caption_events(beat_cues, beat_spec.get('caption_keywords')))
                 page['beats'].append(beat)
                 cues.extend(beat_cues)
                 audio_report.append({'id': beat_id, 'source': master_report['source'] if master_report else str(resolve_input(self.root, beat_spec['audio'])), **measurements})
@@ -322,7 +517,7 @@ class FilmBuilder:
                     pieces.append(pause_samples)
                     cursor += duration + len(pause_samples) / SAMPLE_RATE
             ids = [beat['id'] for beat in page['beats']]
-            blocks = [(beat['start'] + .54, beat['end'] - max(.5, beat['duration'] * .13), .07, spec['actions'], beat['id'])
+            blocks = [(beat['start'] + .54, beat['end'] - max(.5, beat['duration'] * .13), .07, expand_actions(spec['actions']), beat['id'])
                       for spec, beat in zip(page_spec['beats'], page['beats']) if spec.get('actions')]
             for group in page_spec.get('visual_groups', []):
                 covered = group_beats(ids, group)
@@ -333,7 +528,7 @@ class FilmBuilder:
                     raise ValueError('Visual group has no actions')
                 # A group keeps drawing across sentences; an action with from_beat starts when its sentence starts.
                 start, end, current = page['beats'][ids.index(covered[0])]['start'] + lead, page['beats'][ids.index(covered[-1])]['end'] - hold, []
-                for spec in group['actions']:
+                for spec in expand_actions(group['actions']):
                     anchor = page['beats'][ids.index(anchor_beat(covered, ids, spec))]['start']
                     if current and spec.get('from_beat') is not None:
                         if anchor - .08 <= start:
@@ -365,14 +560,19 @@ class FilmBuilder:
                     # draw at video pace and hand unused time back: later actions may use it, the rest holds the picture.
                     left = end - start - sum(gaps[index:]) - sum(floors[index:])
                     seconds = floor + max(0., left) * weights[index] / sum(weights[index:])
-                    action = self.create_asset(spec, seconds)
+                    action = self.create_asset(spec, seconds, scale)
                     seconds = min(seconds, drawn_seconds(self.assets[action['asset']], seconds))
                     action.update(start=start, end=start + seconds, caption=False, visual=spec.get('visual'))
                     if spec['type'] == 'illustration':
                         action['image'] = [spec['source'], spec.get('crop')]
+                    parts = [part['id'] for part in self.assets[action['asset']].get('parts', [])]
+                    effects = resolve_motions(spec, action, page, {beat['id']: beat for beat in page['beats']}, parts)
+                    if not effects and self.direction['motion'] == 'auto' and not self.manifest.get('runtime_fixture'):
+                        effects = [dict(effect, auto=True) for effect in direction.auto_motions(action, self.direction['boil'])]
+                    if effects:
+                        action['motions'] = effects
                     page['events'].append(action)
                     start += seconds + travel
-            validate_page_motion(page, {'width': self.width, 'height': self.height}, first=page_index == 0)
             page['speech_end'] = page['beats'][-1]['end']
             pause = float(options.get('page_pause_seconds', .24)) if page_index < len(self.manifest['pages']) - 1 else float(options.get('end_hold_seconds', .45))
             if pause < 0:
@@ -388,10 +588,34 @@ class FilmBuilder:
                 pieces.append(pause_samples)
                 cursor += len(pause_samples) / SAMPLE_RATE
             page['end'] = cursor
+            if auto_camera:
+                page['last_drawing_end'] = max(event['end'] for event in page['events'] if not event['caption'])
+                keys = direction.auto_camera(page, self.assets, self.width, self.height, page_index)
+                if keys:
+                    for key in keys:
+                        key['center'] = [min(max(key['center'][0], 0.), self.width), min(max(key['center'][1], 0.), self.height)]
+                    page['camera'] = keys
+                    page['auto'] = page.get('auto', []) + ['camera']
+            # Numeric camera times are checked against the page length, known only now.
+            validate_page_motion(page, {'width': self.width, 'height': self.height}, first=page_index == 0)
             for event in page['events']:
                 if not event['caption']:
                     event['hide'] = cursor
+                    import motion
+                    # Automatic settles that would run past the page simply do not play.
+                    event['motions'] = [effect for effect in event.get('motions', ())
+                                        if not (effect.get('auto') and effect['end'] > cursor and effect['type'] not in motion.IDLE)]
+                    if not event['motions']:
+                        event.pop('motions')
+                    for effect in event.get('motions', ()):
+                        if effect['type'] in motion.IDLE:
+                            continue  # loops simply stop when the page turns
+                        if effect['end'] > cursor + 1e-6:
+                            raise ValueError(f'Motion {effect["type"]} on {event["asset"]} runs past the end of its page')
             page['last_drawing_end'] = max(event['end'] for event in page['events'] if not event['caption'])
+            overlays = self.overlay_events(page_spec, page, scale)
+            if overlays:
+                page['overlays'] = overlays
             pages.append(page)
         ending = self.manifest.get('ending', {})
         fade = float(ending.get('fade_seconds', 0))
@@ -435,11 +659,25 @@ class FilmBuilder:
         validate_subtitles(timeline)
         caption_clearance(timeline, self.work / 'assets')
         timeline['storyboard'] = check_build(self.root, self.manifest, timeline)
+        timeline['storyboard']['warnings'] += self.caption_warnings
+        # Pen and marker sounds follow the finished drawing schedule (audio.foley, on by default).
+        from foley import attach as attach_foley
+        attach_foley(self.root, timeline, self.manifest)
         cover = Image.open(resolve_input(self.root, self.manifest['cover']['source'])).convert('RGB')
         if abs(cover.width / cover.height - self.width / self.height) > .025:
             raise ValueError('Cover aspect ratio differs from canvas; generate or intentionally crop an appropriate cover')
         cover.resize((self.width, self.height), Image.Resampling.LANCZOS).save(self.output / 'cover.png')
         (self.work / 'timeline.json').write_text(json.dumps(timeline, ensure_ascii=False, indent=2))
+        # Viewing metrics come from rendered frames, so they need the saved timeline and cover.
+        import visual_metrics
+        from video_renderer import Renderer
+        design_path = self.root / self.manifest.get('design_file', 'design.json')
+        design = json.loads(design_path.read_text()) if design_path.is_file() else {}
+        timeline['visual_metrics'] = visual_metrics.measure(Renderer(self.root), design)
+        timeline['storyboard']['warnings'] += timeline['visual_metrics']['warnings']
+        (self.work / 'timeline.json').write_text(json.dumps(timeline, ensure_ascii=False, indent=2))
+        if timeline['visual_metrics']['errors'] and not self.manifest.get('runtime_fixture'):
+            raise ValueError('; '.join(timeline['visual_metrics']['errors']))
         editing = self.output / 'editing'
         editing.mkdir(exist_ok=True)
         legacy = self.output / 'captions.srt'
@@ -447,6 +685,9 @@ class FilmBuilder:
             legacy.replace(editing / 'previous-captions.srt')
         (editing / 'transcript.srt').write_text('\n'.join(f"{index + 1}\n{subtitle_time(cue['start'])} --> {subtitle_time(cue['end'])}\n{cue['text']}\n" for index, cue in enumerate(cues)))
         (self.output / 'script.txt').write_text(self.manifest['title'] + '\n\n' + '\n\n'.join(cue['text'] for cue in cues))
+        metrics = timeline['visual_metrics']
         print(json.dumps({'duration_seconds': timeline['duration'], 'pages': len(pages), 'beats': len(cues), 'drawn_assets': len(self.assets),
-                          'storyboard': timeline['storyboard']['stats'], 'warnings': timeline['storyboard']['warnings']}, ensure_ascii=False))
+                          'storyboard': timeline['storyboard']['stats'],
+                          'viewing': {key: metrics[key] for key in ('first_meaningful_visual_seconds', 'longest_unchanged_seconds')},
+                          'warnings': timeline['storyboard']['warnings']}, ensure_ascii=False))
         return timeline

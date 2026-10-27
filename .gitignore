@@ -6,3 +6,6 @@ dist/
 .env
 .env.*
 node_modules/
+
+# Local productions, benches and evidence (large, never versioned)
+output/

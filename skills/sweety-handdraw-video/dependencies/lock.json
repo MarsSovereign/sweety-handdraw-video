@@ -24,7 +24,7 @@
     "commit": "9ff59339f934e08483ba0a5b1db20f4c2c421b35",
     "path": "dependencies/huashu-art-motion",
     "license": "MIT (preserved upstream notices)",
-    "files": 427,
+    "files": 366,
     "entry": "GUIDE.md",
     "entry_sha256": "de53b14f85d3bf8b170e61f6032e880bcd24c90da61b4a1344e86326646067ad",
     "url": "https://github.com/alchaincyf/huashu-art-motion"

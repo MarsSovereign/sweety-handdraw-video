@@ -5,6 +5,7 @@ import math
 import re
 import numpy as np
 from scipy import ndimage
+from scipy.spatial import cKDTree
 from motion_profile import PEAK, time_fraction
 from line_topology import turning
 from stroke_paths import calculate_lengths
@@ -20,6 +21,15 @@ REVERSE_COST = 250.  # px of extra travel a right-hander accepts rather than dra
 HURRIED = REVERSE_COST / SPEED_FACTOR  # a hand at the speed cap cares less about direction
 KEY_PART = re.compile(r'head|face|eye|mouth|nose|hand|finger|paw', re.I)
 SILHOUETTE, KEY, STRUCTURE, DETAIL, TEXTURE = range(5)
+# Stroke planning (draw-v3), in fractions of the picture diagonal unless noted.
+ATTACH = .012        # a stroke starting this close to ink already drawn grows out of it
+DETACHED = .12       # extra cost of starting a new line away from the drawn ink of the same object
+TIER_COST = {SILHOUETTE: 0., KEY: .04, STRUCTURE: .07, DETAIL: .14, TEXTURE: .25}
+OBJECT_MASS = .35    # a bigger object is drawn first unless a smaller one is much nearer
+UPWARD = .35         # px of cost per px the pen must climb back up the page (a right-hander works downward)
+LAPSED = 1.5         # time-lapse factor from which one-frame strokes and lifts are allowed
+REFERENCE_SIDE = 400.  # px: picture side the human-pace constants were calibrated on
+MAX_SIZE_SCALE = 1.8   # larger pictures draw at most this much faster per screen pixel
 
 
 def hashed(value):
@@ -41,10 +51,31 @@ def line_cap(speed):
     return LINE_SPEED * SPEED_FACTOR * speed
 
 
-def lift_seconds(distance, fps=30, scale=1., lapse=1.):
-    """Pen-up time: 80-150 ms at human pace, time-lapsed with the ink down to 2 frames, never so short that the
-    renderer's lifted move (75% of it in min-jerk motion, peak 1.875x mean) exceeds TRAVEL_PX per frame."""
-    return max(2. / fps, (.08 + .07 * min(1., distance / 300.)) * scale / lapse, 1.875 * distance / (.75 * TRAVEL_PX * fps))
+def frame_floor(fps, lapse):
+    """Shortest pen motion: two frames at human pace; one frame once time-lapsed, where a quick flick is what a
+    sped-up drawing shows (the per-frame distance caps still keep it from teleporting)."""
+    return (1. if lapse >= LAPSED else 2.) / fps
+
+
+def lift_seconds(distance, fps=30, scale=1., lapse=1., size=1.):
+    """Pen-up time: 80-150 ms at human pace, time-lapsed with the ink, never so short that the renderer's lifted
+    move (75% of it in min-jerk motion, peak 1.875x mean) exceeds TRAVEL_PX (scaled with the picture) per frame."""
+    return max(frame_floor(fps, lapse), (.08 + .07 * min(1., distance / (300. * size))) * scale / lapse,
+               1.875 * distance / (.75 * TRAVEL_PX * size * fps))
+
+
+def picture_size(width, height):
+    """How much larger than the calibration size a picture is drawn. Timing follows the picture, not the screen:
+    a picture twice as large is not twice the work, so speeds and per-frame caps scale with it (bounded)."""
+    return float(np.clip(math.sqrt(width * height) / REFERENCE_SIDE, 1., MAX_SIZE_SCALE))
+
+
+def slide_reach(strokes):
+    """Gap a pen crosses without lifting: the next line starts on (or right beside) the ink it just laid."""
+    if not strokes:
+        return 3.
+    every = np.vstack([stroke['points'] for stroke in strokes])
+    return max(3., ATTACH * float(np.linalg.norm(every.max(0) - every.min(0))))
 
 
 def stroke_profile(stroke, lapse):
@@ -59,6 +90,8 @@ def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
     _, nearest = ndimage.distance_transform_edt(~owned, return_indices=True)
     owner_map = owners[nearest[0], nearest[1]]
     exterior = ndimage.distance_transform_edt(ndimage.binary_fill_holes(alpha > 30))
+    # Objects are the solid shapes of the picture: an eye inside a face belongs to the face it sits in.
+    shapes, _ = ndimage.label(alpha > 30, structure=np.ones((3, 3)))
     rgb = pixels[:, :, :3].astype(float)
     luminance = np.where(alpha > 30, rgb @ [.299, .587, .114], 255.)
     ink_reference = np.percentile(luminance[alpha > 30], 2) if (alpha > 30).any() else 0.
@@ -66,6 +99,8 @@ def classify(strokes, owners, alpha, pixels, part_ids, key_parts=()):
     for index, stroke in enumerate(strokes):
         cells = np.clip(np.rint(stroke['points']).astype(int), 0, [width - 1, height - 1])
         stroke['part'] = int(np.bincount(owner_map[cells[:, 1], cells[:, 0]]).argmax())
+        found = shapes[cells[:, 1], cells[:, 0]]
+        stroke['object'] = int(np.bincount(found[found > 0]).argmax()) if (found > 0).any() else -1 - index
         window = np.clip(cells[:, None, :] + offsets[None], 0, [width - 1, height - 1])
         values = luminance[window[..., 1], window[..., 0]]
         darkest = np.argmin(values, axis=1)
@@ -116,65 +151,149 @@ def apply_order(stroke, index):
         stroke['weights'] = weighted_lengths(stroke['points'])
 
 
-def order(strokes, part_count, tip, reverse=REVERSE_COST):
-    """Within each semantic part and priority tier, scan top to bottom then left to right.
-    Travel distance may choose a stroke's direction, never move a lower stroke ahead of an upper one."""
-    ordered = []
-    tip = np.asarray(tip, float)
-    for part in range(part_count):
-        for tier in (SILHOUETTE, KEY, STRUCTURE, DETAIL, TEXTURE):
-            pool = sorted((stroke for stroke in strokes if stroke['part'] == part and stroke['tier'] == tier),
-                          key=lambda stroke: (float(stroke['points'][:, 1].min()), float(stroke['points'][:, 0].min()), stroke['index']))
-            for stroke in pool:
-                index, penalty = orient(stroke, tip, reverse)
-                points = stroke['points']
-                if penalty is not None and np.linalg.norm(points[index[-1]] - tip) + penalty < np.linalg.norm(points[index[0]] - tip):
-                    index = index[::-1]
-                apply_order(stroke, index)
-                ordered.append(stroke)
-                tip = stroke['points'][-1]
+def groups(pool, reach):
+    """The separate objects inside a part: strokes on one solid shape of the picture (classify sets 'object'),
+    else strokes that touch (two samples within reach px)."""
+    if all('object' in stroke for stroke in pool):
+        found = {}
+        for stroke in pool:
+            found.setdefault(stroke['object'], []).append(stroke)
+        return list(found.values())
+    parent = list(range(len(pool)))
+
+    def root(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+    samples = [stroke['points'][::2] for stroke in pool]
+    owners = np.concatenate([np.full(len(points), index) for index, points in enumerate(samples)])
+    for first, second in cKDTree(np.vstack(samples)).query_pairs(reach):
+        a, b = root(owners[first]), root(owners[second])
+        if a != b:
+            parent[a] = b
+    found = {}
+    for index in range(len(pool)):
+        found.setdefault(root(index), []).append(pool[index])
+    return list(found.values())
+
+
+def oriented_start(stroke, tip, reverse):
+    """(index order, start point) for the right-hander's preferred direction, unless the far end is much nearer."""
+    index, penalty = orient(stroke, tip, reverse)
+    points = stroke['points']
+    if penalty is not None and np.linalg.norm(points[index[-1]] - tip) + penalty < np.linalg.norm(points[index[0]] - tip):
+        index = index[::-1]
+    return index, points[index[0]]
+
+
+def sequence(group, tip, reverse, diagonal, reach):
+    """Draw one object like a person with a plan: its outer silhouette first, then interior lines in the order
+    they grow out of ink already on the page, near the pen, longer structure before small details, and
+    rarely back up the page."""
+    ordered, drawn = [], None
+    for phase in ((SILHOUETTE,), (KEY, STRUCTURE, DETAIL, TEXTURE)):
+        todo = [stroke for stroke in group if stroke['tier'] in phase]
+        while todo:
+            best = None
+            for stroke in todo:
+                index, start = oriented_start(stroke, tip, reverse)
+                cost = np.linalg.norm(start - tip) + TIER_COST[stroke['tier']] * diagonal
+                cost += UPWARD * max(0., tip[1] - float(stroke['points'][:, 1].min()))
+                if drawn is not None:
+                    ends = stroke['points'][[0, -1]]
+                    cost += 0. if drawn.query(ends)[0].min() <= reach else DETACHED * diagonal
+                elif stroke['tier'] == SILHOUETTE:
+                    cost += .5 * float(stroke['points'][:, 1].min()) - .1 * stroke.get('length', 0.)
+                if best is None or cost < best[0]:
+                    best = (cost, stroke, index)
+            _, stroke, index = best
+            todo = [item for item in todo if item is not stroke]
+            apply_order(stroke, index)
+            ordered.append(stroke)
+            tip = stroke['points'][-1]
+            drawn = cKDTree(np.vstack([item['points'] for item in ordered]))
     return ordered, tip
 
 
-def duration(stroke, speed, fps, lapse=1.):
-    """(seconds, profile): at least 2 frames, and the profile's peak speed stays inside FRAME_PX per frame."""
+def order(strokes, part_count, tip, reverse=REVERSE_COST):
+    """Plan each semantic part as a person would: object by object (strokes that touch form an object), the
+    nearest substantial object next, and inside an object the silhouette first, then lines that grow out of
+    what is already drawn. Replaces draw-v2's per-tier top-to-bottom scan, which hopped across the picture."""
+    ordered = []
+    tip = np.asarray(tip, float)
+    if not strokes:
+        return ordered, tip
+    every = np.vstack([stroke['points'] for stroke in strokes])
+    diagonal = max(1., float(np.linalg.norm(every.max(0) - every.min(0))))
+    reach = max(3., ATTACH * diagonal)
+    for part in range(part_count):
+        pool = [stroke for stroke in strokes if stroke['part'] == part]
+        if not pool:
+            continue
+        objects = groups(pool, reach)
+        length = lambda stroke: stroke.get('length', float(calculate_lengths(stroke['points'])[-1]))
+        mass = sum(length(stroke) for stroke in pool) or 1.
+        while objects:
+            def cost(group):
+                # Reading order of the object (top first, then left), a little pen travel, and bigger objects first.
+                corner = np.vstack([stroke['points'] for stroke in group]).min(0)
+                nearest = min(np.linalg.norm(stroke['points'][[0, -1]] - tip, axis=1).min() for stroke in group)
+                return corner[1] + .35 * corner[0] + .3 * nearest - OBJECT_MASS * diagonal * sum(map(length, group)) / mass
+            group = min(objects, key=cost)
+            objects = [item for item in objects if item is not group]
+            planned, tip = sequence(group, tip, reverse, diagonal, reach)
+            ordered.extend(planned)
+    return ordered, tip
+
+
+def duration(stroke, speed, fps, lapse=1., size=1.):
+    """(seconds, profile): at least the frame floor, and the profile's peak speed stays inside FRAME_PX per frame."""
     profile = stroke_profile(stroke, lapse)
-    return max(2. / fps, stroke['weights'][-1] / min(speed, FRAME_PX * fps / PEAK[profile])), profile
+    return max(frame_floor(fps, lapse), stroke['weights'][-1] / min(speed, FRAME_PX * size * fps / PEAK[profile])), profile
 
 
-def line_seconds(ordered, speed, fps, detail_speed=None, lapse=1., part_count=None):
+def gap_seconds(distance, fps, scale, lapse, size, slide, speed):
+    """Pen movement between two strokes: a slide along the ink when the next line starts where this one ended,
+    otherwise a lift."""
+    if distance <= slide:
+        return max(distance / max(speed, 1e-6), .2 / fps)  # still a distinct moment between two strokes
+    return lift_seconds(distance, fps, scale, lapse, size)
+
+
+def line_seconds(ordered, speed, fps, detail_speed=None, lapse=1., part_count=None, size=1., slide=0.):
     total, previous, last_part = 0., None, None
     for stroke in ordered:
         rate = detail_speed if detail_speed and stroke['tier'] >= DETAIL else speed
-        total += duration(stroke, rate, fps, lapse)[0]
+        total += duration(stroke, rate, fps, lapse, size)[0]
         if previous is not None:
-            total += lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1, lapse)
+            total += gap_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, 1.1, lapse, size, slide, rate)
         if last_part is not None and stroke['part'] != last_part:
             total += PART_PAUSE / max(lapse, 1e-6)
         previous, last_part = stroke['points'][-1], stroke['part']
     return total
 
 
-def requirements(strokes, part_count, tip, speed, fps):
+def requirements(strokes, part_count, tip, speed, fps, size=1.):
     """Seconds for: every stroke at human pace; every stroke at the cap; silhouette + key features at the cap."""
     every = [dict(stroke) for stroke in strokes]
     essential = [dict(stroke) for stroke in strokes if stroke['tier'] in (SILHOUETTE, KEY)]
-    cap = line_cap(speed)
-    at_cap = lambda kept, detail: line_seconds(order(kept, part_count, tip, HURRIED)[0], cap, fps, detail, SPEED_FACTOR)
-    return {'required': line_seconds(order(every, part_count, tip)[0], LINE_SPEED * speed, fps),
+    cap, slide = line_cap(speed), slide_reach(strokes)
+    at_cap = lambda kept, detail: line_seconds(order(kept, part_count, tip, HURRIED)[0], cap, fps, detail, SPEED_FACTOR, size=size, slide=slide)
+    return {'required': line_seconds(order(every, part_count, tip)[0], LINE_SPEED * speed, fps, size=size, slide=slide),
             'all_at_cap': at_cap(every, cap * DETAIL_BOOST), 'minimum': at_cap(essential, None)}
 
 
-def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
+def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30, size=1.):
     """Fit every stroke into budget seconds (faster up to the cap, never fewer strokes). Returns ordered strokes with
     times (fractions of total), segments, per-part [start, end] fractions and counts."""
-    base, cap = LINE_SPEED * speed, line_cap(speed)
+    base, cap, slide = LINE_SPEED * speed, line_cap(speed), slide_reach(strokes)
     budget += 1e-6  # a window at exactly the minimum sums the same terms; float noise must not read as haste past the cap
     # A hurried hand takes the nearer end more often: soften the direction prior only for haste beyond video pace
     # (a time-lapse of a calm hand keeps its order and directions); at the cap it is the order the minimum assumed.
-    reverse = REVERSE_COST / float(np.clip(line_seconds(order(strokes, part_count, tip)[0], base, fps) / VIDEO_LAPSE / max(budget, 1e-6), 1, SPEED_FACTOR))
+    reverse = REVERSE_COST / float(np.clip(line_seconds(order(strokes, part_count, tip)[0], base, fps, size=size, slide=slide) / VIDEO_LAPSE / max(budget, 1e-6), 1, SPEED_FACTOR))
     ordered, _ = order(strokes, part_count, tip, reverse)
-    seconds = lambda pace, detail=None: line_seconds(ordered, pace, fps, detail, max(1., pace / base))
+    seconds = lambda pace, detail=None: line_seconds(ordered, pace, fps, detail, max(1., pace / base), size=size, slide=slide)
     if seconds(cap, cap * DETAIL_BOOST) > budget:
         ordered, _ = order(strokes, part_count, tip, HURRIED)
     low, high = base, cap
@@ -199,12 +318,14 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
         part_start = cursor
         mine = [stroke for stroke in ordered if stroke['part'] == part]
         for stroke in mine:
+            rate = detail_speed if stroke['tier'] >= DETAIL else speed_used
             if previous is not None:
-                lift = lift_seconds(np.linalg.norm(stroke['points'][0] - previous), fps, .9 + .2 * hashed(stroke['index']), lapse)
-                segments.append({'kind': 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
-                                 'points': [previous.tolist(), stroke['points'][0].tolist()]})
+                distance = float(np.linalg.norm(stroke['points'][0] - previous))
+                lift = gap_seconds(distance, fps, .9 + .2 * hashed(stroke['index']), lapse, size, slide, rate)
+                segments.append({'kind': 'slide' if distance <= slide else 'travel', 'start': cursor / total, 'end': (cursor + lift) / total,
+                                 'points': [previous.tolist(), stroke['points'][0].tolist()], 'lengths': [0., distance]})
                 cursor += lift
-            seconds, profile = duration(stroke, detail_speed if stroke['tier'] >= DETAIL else speed_used, fps, lapse)
+            seconds, profile = duration(stroke, rate, fps, lapse, size)
             fraction = time_fraction(stroke['weights'] / max(1e-6, stroke['weights'][-1]), profile)
             stroke['times'] = (cursor + seconds * fraction) / total
             segments.append({'kind': 'ink', 'start': cursor / total, 'end': (cursor + seconds) / total, 'profile': profile,
@@ -220,6 +341,7 @@ def schedule(strokes, part_count, tip, budget, start, total, speed=1., fps=30):
             cursor += pause
     end = cursor / total
     counts = {'drawn_stroke_count': len(ordered), 'line_speed_px_s': round(speed_used, 1), 'speed_over_cap': bool(speed_used > cap * 1.001),
+              'slides': sum(segment['kind'] == 'slide' for segment in segments),
               'drawn_fast_count': sum(s['tier'] >= DETAIL and pressure > 0 for s in ordered),
               'part_pause_seconds': PART_PAUSE}
     return ordered, segments, parts, end, counts

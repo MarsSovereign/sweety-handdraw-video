@@ -8,7 +8,7 @@ Agent 负责理解内容、写口播、设计分镜和生成插画；本地工�
 
 [看有声样片](#精选样片) · [安装与环境](#安装与环境) · [开始制作](#开始制作) · [全部制作选项](#全部制作选项) · [常见问题](#常见问题) · [关注作者](https://x.com/leo_xiaolei)
 
-> **当前版本：v1.4.1（2026-10-20）**。发布入口与安装包版本统一；密集画面增加构图约定和实际页面范围检查。原生选项（模型推理/主动选择），默认竖屏 9:16；风格文字列表+模型推理；导演 `presentation.mode` 控制单页疏密；拟人绘制部位停顿。上一封板为 v1.3（2026-10-17）。以包内 `VERSION` 和 Git 标签为准。
+> **当前版本：v2.0.0（2026-10-27）**。上色像人：先描边再斜向排笔、湿笔触后干透，不再按部件方框一块块出现；镜头有了名字和节奏（推、拉、横移、hop、甩、砸入，对数缩放、到位震动），自动导演每页换一种拿图方式；转场扩到 22 种，翻页四个方向、撕纸、毛刷、墨晕、墨渍光圈、橡皮擦、立方体、拼砖、碎片；网页动效层可做大字砸入与乱码收敛、手绘图表、转动地球上的航线和形状接力；给模型的[运镜、转场与动效目录](skills/sweety-handdraw-video/references/motion-catalog.md)。详见 [v2.0.0 发布记录](docs/releases/v2.0.0.md)，v1.5 见[其发布记录](docs/releases/v1.5.0.md)。以包内 `VERSION` 和 Git 标签为准。
 
 ## 精选样片
 
@@ -64,8 +64,8 @@ Agent 负责理解内容、写口播、设计分镜和生成插画；本地工�
 
 - **画风跟随内容**：21 个库内入口，也可让模型独立设计，或提供自定义方向。
 - **声音先行、按段生成**：口播按语义段落生成，每段过嗡声 / 底噪 / 削波门禁，拼接停顿实测，再按时间戳安排画面与字幕。
-- **像人一样画**：墨线平涂画风整笔描线、先轮廓后细节、抬笔移动、马克笔之字形上色；无轮廓画风由笔刷按部位揭示；汉字按标准笔顺书写。
-- **先算预算再出图**：分镜按旁白算出每幅画能画几秒、最多几笔，图按预算设计，不靠压缩时间硬塞。
+- **像人一样画，而且有条理**：只描真实墨线，深色填充不再以噪点提前出现；复杂画面按对象逐个画完，对象内先外轮廓、再从已画线条上"长出"内部线条；马克笔就近之字形上色；无轮廓画风由笔刷按部位揭示；汉字按标准笔顺书写。
+- **先算预算再出图**：分镜按旁白算出每幅画能画几秒、最多几笔（约每秒 5 笔，与图幅基本无关），图按预算设计，不靠压缩时间硬塞；`layout_plan.py` 给出平台安全区版式并实测指定尺寸的最少绘制时间。
 - **可以定位修改**：保留脚本、素材、声音、时间戳和检查记录，修字幕不必重新生图。
 - **运行与观感分别检查**：文件能播放、声音清楚、剧情画对，是不同检查项。
 
@@ -98,7 +98,7 @@ Agent 负责理解内容、写口播、设计分镜和生成插画；本地工�
 npx skills add threerocks/sweety-handdraw-video --skill sweety-handdraw-video --agent claude-code codex --global --copy --yes
 ```
 
-安装位置：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`，Codex 为 `~/.agents/skills/sweety-handdraw-video`（该命令写入的通用目录）。只装一个宿主时去掉另一个 `--agent` 值；不加 `--global` 则装进当前项目（Claude Code 为 `.claude/skills/`）。此命令安装仓库当前公开内容。需要固定本版时，使用 [v1.4.1 安装包](https://github.com/threerocks/sweety-handdraw-video/releases/download/v1.4.1/sweety-handdraw-video-v1.4.1.zip)；[全部版本](https://github.com/threerocks/sweety-handdraw-video/releases)。下载同页的 `SHA256SUMS.txt`，执行 `shasum -a 256 -c SHA256SUMS.txt` 校验。更新仓库不会自动更新已安装的副本；替换完整 Skill 目录后，读取其中的 `VERSION`，本版应为 `1.4.1`。
+安装位置：Claude Code 为 `~/.claude/skills/sweety-handdraw-video`，Codex 为 `~/.agents/skills/sweety-handdraw-video`（该命令写入的通用目录）。只装一个宿主时去掉另一个 `--agent` 值；不加 `--global` 则装进当前项目（Claude Code 为 `.claude/skills/`）。此命令安装仓库当前公开内容。需要固定本版时，使用 [v2.0.0 安装包](https://github.com/threerocks/sweety-handdraw-video/releases/download/v2.0.0/sweety-handdraw-video-v2.0.0.zip)；[全部版本](https://github.com/threerocks/sweety-handdraw-video/releases)。下载同页的 `SHA256SUMS.txt`，执行 `shasum -a 256 -c SHA256SUMS.txt` 校验。更新仓库不会自动更新已安装的副本；替换完整 Skill 目录后，读取其中的 `VERSION`，本版应为 `2.0.0`。
 
 手动安装：将包内的 `sweety-handdraw-video` **整个文件夹**放入宿主的 Skills 目录，例如 `~/.claude/skills/sweety-handdraw-video`（Claude Code）或 `~/.codex/skills/sweety-handdraw-video`（Codex）。更新前备份旧目录；仅复制 `SKILL.md` 会缺少脚本、素材和内置依赖。手部、画风预览与试听已随包提供（约 38 MB），装好即可离线使用，不再依赖首次下载。
 
@@ -115,7 +115,7 @@ bash ~/.claude/skills/sweety-handdraw-video/scripts/setup.sh --check  # 只检�
 
 | 条件 | 用途与边界 |
 |---|---|
-| 能读取 Skill、执行本地命令的 Agent | Codex 与 Claude Code。完整制作实测仍来自 macOS + Codex；Claude Code 已验证安装与本地脚本，整片流程待实测 |
+| 能读取 Skill、执行本地命令的 Agent | Codex 与 Claude Code。两者都已在 macOS 上完成整片实测（Claude Code 通过本机 Codex CLI 出图） |
 | 可用的图像生成能力 | Codex 内置生图；Claude Code 需要接入生图工具 / MCP，或由用户提供插画。脚本无法探测宿主能力：没有生图能力时必须停下说明，不能交付只有文字的视频 |
 | Python 3.9+ | 本地绘制与合成；依赖 Pillow、NumPy、SciPy、requests、fontTools，由 `setup.sh` 装入独立虚拟环境 |
 | FFmpeg 与 ffprobe | 合成、编码、解码与音视频检查 |
@@ -175,7 +175,7 @@ VoiceStudio 需要 `/engines/tts`、`/generate` 及可选 `/transcribe` 接口�
 【粘贴文章】
 ```
 
-未指定时采用简体中文、1920×1080、30fps。时长由实际口播决定；“约一分钟”是创作目标，不靠拉长空白凑时间。默认有 1 秒封面，前 0.5 秒静止、后 0.5 秒渐隐。
+未指定时采用简体中文、竖屏 1280×1920（2:3，2.0 起；此前为 9:16）、30fps。时长由实际口播决定；“约一分钟”是创作目标，不靠拉长空白凑时间。默认有 1 秒封面，前 0.5 秒静止、后 0.5 秒渐隐。
 
 开始时提供六项选择：画风、手部、声音、笔杆广告、水印、字幕。已明确的项目跳过；每个未选项目最多等 60 秒，随后采用模型根据内容拟定的方案。说“全部自动选择”会直接继续。广告与水印默认不加。
 
@@ -192,9 +192,9 @@ VoiceStudio 需要 `/engines/tts`、`/generate` 及可选 `/transcribe` 接口�
 | 水印 | 最多 180 字符，支持换行；低对比、缓慢浮动；空白即不加 |
 | 字幕 | 默认白字黑边；`quiet` 无底板 / `plate` 有底板；全程只允许一套字幕 |
 | 正文文字 | 手写关键句与插画分别编排；字形四边预留余量 |
-| 画布与帧率 | 默认 1920×1080、30fps；其他尺寸需重新检查构图、字号与遮挡 |
+| 画布与帧率 | 默认竖屏 1280×1920（2:3）、30fps；其他尺寸需重新检查构图、字号与遮挡 |
 | 节奏 | 根据旁白时间戳安排描线、填色、文字、抬笔和停留；可提出快慢要求 |
-| 音乐与音效 | 默认纯旁白；必要音效逐项说明用途；背景音乐不自动添加，用户提供音乐时构建自动循环接续、淡入淡出并随旁白压低 |
+| 音乐与音效 | 默认只在手写文字时有与笔尖同步的柔和笔声，描线和上色静音（可关，也可设为画画也发声）；背景音乐不自动添加，可提供自有音乐或选内置合成配乐 `builtin:calm/warm/curious/focused/tense`，构建自动循环接续、淡入淡出并随旁白压低 |
 | 封面与片尾 | 1 秒封面；默认片尾停留 0.45 秒；结束语须写入完整旁白 |
 | 修订 | 可复用已通过的图和声音；相关素材改变后重新检查受影响部分 |
 
@@ -331,7 +331,7 @@ VoiceStudio 需要 `/engines/tts`、`/generate` 及可选 `/transcribe` 接口�
 
 **会按规范汉字笔顺写吗？有橡皮擦转场吗？**
 
-会。GB2312 范围内的汉字按标准笔顺逐笔书写（笔画数据来自 hanzi-writer-data，Arphic 公共许可）；其余字符按字形轮廓描线。橡皮擦转场仍无交付证据，不列为现成功能。
+会。GB2312 范围内的汉字按标准笔顺逐笔书写（笔画数据来自 hanzi-writer-data，Arphic 公共许可）；其余字符按字形轮廓描线。v1.5 起有板擦擦黑板转场（`transition: {"type": "erase"}`）；2.0 增加橡皮擦（`"style": "rubber"`，会留下碎屑）、四个方向的翻页、撕纸、毛刷刷出等，全部转场见[动效目录](skills/sweety-handdraw-video/references/motion-catalog.md)。
 
 **发布到平台要注意什么？**
 
@@ -359,7 +359,7 @@ python3 tools/release.py check
 python3 -m unittest discover -s tools -p 'test*.py' -v
 ```
 
-v1.4.1 新增发布一致性和实际画面范围检查，变更、安装校验与验收边界见 [发布记录](docs/releases/v1.4.1.md)。标签触发发布工作流，先完成 macOS / Linux 检查，再从标签提交打包上传 ZIP 与校验文件；稳定标签不移动。
+v2.0.0 的变更、前后对比与验收边界见 [发布记录](docs/releases/v2.0.0.md)，v1.5.0 见[其记录](docs/releases/v1.5.0.md)；v1.4.1 新增发布一致性和实际画面范围检查，见 [v1.4.1 记录](docs/releases/v1.4.1.md)。标签触发发布工作流，先完成 macOS / Linux 检查，再从标签提交打包上传 ZIP 与校验文件；稳定标签不移动。
 
 v1.3 记录：158 项回归通过（1 项平台用例跳过）、离线冒烟短片通过、安装包 843 个文件、49.4 MB 通过核验；蛇故事以 v1.3 流程端到端重做（揭示模式），软件工具片以修复后的引擎重做（18 幅插画全部逐笔绘制、无淡入，终帧与原图一致）；2026-10-17 增补宽墨线角点覆盖、混音电平、数字比较与填充最短时长修复，并新增配乐自动准备。相应成片工程检查、声音门禁与字幕同步均通过。该结果不能替代视频观感、故事事实、听感或学习效果验收。更多记录见 [验证范围](docs/validation.md)。
 

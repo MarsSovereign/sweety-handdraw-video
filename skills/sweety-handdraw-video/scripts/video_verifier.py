@@ -112,6 +112,10 @@ def verify_assets(root, timeline):
             require(not metadata['segments'], f'{name}: captions must be static typeset text')
             entries.append({**entry, 'lines': len(metadata['lines']), 'font': metadata['font'], 'background': metadata.get('background')})
             continue
+        if metadata['type'] == 'counter':
+            # A counting number is typeset motion, not pen work: the pen does not visit it.
+            entries.append({**entry, 'counter': {key: metadata['counter'][key] for key in ('from', 'to')}})
+            continue
         require(bool(metadata['segments']), f'{name}: no drawing segments')
         from drawing_contract import validate_strokes
         validate_strokes(metadata)
@@ -139,13 +143,17 @@ def verify_assets(root, timeline):
             drawn = np.isfinite(maps['ink'])
             if drawn.any():
                 distances, _ = match_reveal_to_tip(metadata, maps['ink'], drawn, {'ink'})
-                require(np.isfinite(distances).all() and distances.max() < 9, f'{name}: ink is too far from the nib')
+                # A picture planned at layout size and rendered larger for a close-up keeps its plan: the reach scales with it.
+                reach = 9 * float(metadata.get('render_scale', 1.)) + (2. if metadata.get('render_scale') else 0.)
+                require(np.isfinite(distances).all() and distances.max() < reach, f'{name}: ink is too far from the nib')
                 entry['ink_tip_max_distance_px'] = float(distances.max())
             painted = np.isfinite(maps['color'])
             if painted.any():
                 distances, radii = match_reveal_to_tip(metadata, maps['color'], painted, {'color'})
                 require(np.isfinite(distances).all() and (radii > 0).all(), f'{name}: unpainted color pixels')
-                require((distances <= radii + .04).all(), f'{name}: color outside the active brush')
+                # Rendered larger than planned: each coarse paint pixel became a block of fine ones, up to ~2 px wider.
+                slack = .04 + (3. * float(metadata['render_scale']) if metadata.get('render_scale') else 0.)
+                require((distances <= radii + slack).all(), f'{name}: color outside the active brush')
                 entry['paint_max_overshoot_px'] = float((distances - radii).max())
         else:
             mask = alpha > 0
@@ -205,14 +213,16 @@ def verify_job(job_directory, assets_only=False):
         require(page['last_drawing_end'] <= page['speech_end'] - .45, 'Drawing overruns narration')
         for event in page['events']:
             asset = timeline['assets'][event['asset']]
-            require(0 <= event['x'] and event['x'] + asset['width'] <= canvas['width'], 'Horizontal overflow')
-            require(0 <= event['y'] and event['y'] + asset['height'] <= canvas['height'], 'Vertical overflow')
+            scale = float(event.get('scale', 1.))  # assets of a zoomed page are built at its board resolution
+            require(0 <= event['x'] and event['x'] + asset['width'] / scale <= canvas['width'] + .5, 'Horizontal overflow')
+            require(0 <= event['y'] and event['y'] + asset['height'] / scale <= canvas['height'] + .5, 'Vertical overflow')
             require(event['end'] > event['start'], 'Empty drawing event')
         report['pages'].append({'page': page['index'] + 1, 'duration_seconds': page['end'] - page['start'],
             'drawing_completed_before_speech_end_seconds': page['speech_end'] - page['last_drawing_end']})
     previous_end = 0
     for cue in timeline['cues']:
-        require(previous_end <= cue['start'] < cue['end'] <= timeline['duration'], 'Subtitle order/range error')
+        # Back-to-back cues across beats meet exactly; 1 µs absorbs the float sum of cover and master times.
+        require(previous_end <= cue['start'] + 1e-6 and cue['start'] < cue['end'] <= timeline['duration'] + 1e-6, 'Subtitle order/range error')
         previous_end = cue['end']
     video = output / 'film.mp4'
     render_record = json.loads((work / 'render-record.json').read_text())
@@ -282,15 +292,20 @@ def verify_job(job_directory, assets_only=False):
 
 
 def verify_film_audio(work, timeline, video, audio_mix):
-    """Noise gate on the delivered narration (the film track, or the narration stem when music was requested)
-    and caption sync: cues start within align.SYNC_TOLERANCE_SECONDS of measured speech onsets."""
-    from audio_gate import measure, decode
+    """Noise gate and caption sync (cues start within align.SYNC_TOLERANCE_SECONDS of measured speech onsets).
+
+    Narration only: both run on the delivered film track. With layers (foley, music, effects) the caller has already
+    shown film == work/mix.wav; audio_gate.measure_layered_mix shows mix == narration stem + known layers, gates the
+    stem (hum, pause depth, DC, clipping), the mix (clipping, DC, hum outside the music, voice margin) and reports
+    each layer's level. Caption sync then uses the stem, because intended foley and music fill the pauses it reads."""
+    from audio_gate import measure, decode, measure_layered_mix, read_pcm
     from align import caption_sync
-    film = decode(video)
-    narration_only = not audio_mix['layers']
-    return {'audio_gate': measure(film if narration_only else decode(work/'normalized-narration.wav'),
-                                  'outputs/film.mp4 audio' if narration_only else 'work/normalized-narration.wav'),
-            'caption_sync': caption_sync(film, timeline['cues'])}
+    if not audio_mix['layers']:
+        film = decode(video)
+        return {'audio_gate': measure(film, 'outputs/film.mp4 audio'), 'caption_sync': caption_sync(film, timeline['cues'])}
+    narration = read_pcm(work/'normalized-narration.wav')
+    return {'audio_gate': measure_layered_mix(narration, read_pcm(work/'mix.wav'), audio_mix['layers']),
+            'caption_sync': caption_sync(narration, timeline['cues'])}
 
 
 def finalize_job(job_directory):

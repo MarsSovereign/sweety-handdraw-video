@@ -71,7 +71,7 @@
 - 线稿门槛：`python3 scripts/lineart_gate.py SOURCE --width W --height H [--crop ...] [--outline-mask ...]` 测交叉点密度、小闭合孔、碎点和短纹理线占比；构建时同样检查。纹理型线稿（如边缘检测出的布纹）无法一笔一笔画，build 报错。按[可绘制约定](style-and-drawing.md)简化或重新出图。`lineart_exception` 只记录有意保留的纹理，不是出口：笔仍要一笔一笔画完每条短线，通常会超出窗口。
 - 绘制方式：`"drawing": {"mode": "draw" | "reveal"}` 写在 job 顶层，须与 `style/resolved.json` 的 `drawing_mode` 一致；逐笔绘制的片子里单个插画动作不能改用 `reveal`。揭示只由用户选，见[绘制方式](style-and-drawing.md)。`reveal` 不提取线稿、不过线稿门槛，按部位用斜向软笔刷显出成图，元数据 `mode: "reveal"`，`drawability.minimum_seconds` 很小。见[绘制方式](style-and-drawing.md)。
 - `drawing`：job 顶层或 action 内 `{"speed":1.0,"sketch":false}`，action 覆盖顶层。`speed`（0.25—4）缩放人手基准速度及其上限（描线4倍、上色6倍人速；描线笔尖每帧不超过约80px，上色宽笔每帧不超过约120px）；`sketch:true` 先画淡色构图线，描线后淡出。
-- 插画引擎（draw-v2）：轮廓经清理、骨架化后沿切线连续穿过交叉点成整笔，每笔整体属于一个部位；部位内先外形、再内部结构、后细节，就近衔接并偏向从上到下、从左到右，闭合形从顶部起笔。每笔 min-jerk 速度、转弯处放慢、至少2帧；时间紧时较长的笔改用两端缓起缓收、中段匀速的平台曲线，峰速更低。抬笔基准80—150ms，时间紧时按比例压缩，但至少2帧，空中移动每帧不超过约120px。再小的色块也有自己的一笔马克笔，不会随部位整体显出。上色按部位、按区域用中位色以连续之字形大笔涂（区域内不抬笔），再用短暂的阴影笔从平涂过渡到原图。笔画只决定每个像素何时出现：线稿图层用原图自己的墨线像素（压在色块上的墨线先从底色中分离出来），每个像素在笔尖经过它最近的一笔时出现，不另画一套带笔压的线，终帧与原图一致；若成图出现断线、毛边，先查引擎，不要先怪原图。资产为 `{name}.png` 终帧加 `-line/-paint/-shade(-sketch).png` 图层和 `.npz` 时间图，逐帧合成，终帧与最后一帧一致。
+- 插画引擎（draw-v3）：只有真实墨线才描线——比旁边填充更暗、又接近整张图墨色的细线；深色填充（卫衣、头发、夜空、青色屏幕）的边缘带属于上色，黑色剪影只描细边缘作轮廓；墨色与底色太接近处判定为"墨"或"底色"，不出半透明噪点；离线条很远、只有几个像素的孤立墨点留给上色。轮廓经清理、骨架化后沿切线连续穿过交叉点成整笔，每笔整体属于一个部位。**笔顺按对象规划**：部位内先按图像实心区块分"对象"（眼睛属于它所在的脸），一个对象画完再画下一个，对象按阅读顺序（先上后左）、大的优先并兼顾笔尖距离；对象内先外轮廓，再画从已画线条上"长出来"的线，就近、先长后短、尽量不回头往上；下一笔起点紧贴刚画完的线时笔不抬起、直接滑过去。每笔 min-jerk 速度、转弯处放慢；时间紧时较长的笔改用两端缓起缓收、中段匀速的平台曲线。人速时每笔、每次抬笔至少2帧，延时绘制（快于人速1.5倍以上）时短笔和抬笔可为1帧；空中移动每帧不超过约120px。**时长跟随图幅而非屏幕**：以400px为基准，速度、每帧位移上限和马克笔宽度随图幅放大（最多1.8倍），换手长度、色块拆分阈值同样随图幅缩放；实测约每秒5笔，与图幅基本无关。再小的色块也有自己的一笔马克笔，不会随部位整体显出。上色按部位、从离马克笔最近的色块开始就近推进，用中位色以连续之字形大笔涂（区域内不抬笔），再用短暂的阴影笔从平涂过渡到原图。笔画只决定每个像素何时出现：线稿图层用原图自己的墨线像素（压在色块上的墨线先从底色中分离出来），每个像素在笔尖经过它最近的一笔时出现，不另画一套带笔压的线，终帧与原图一致；若成图出现断线、毛边，先查引擎，不要先怪原图。资产为 `{name}.png` 终帧加 `-line/-paint/-shade(-sketch).png` 图层和 `.npz` 时间图，逐帧合成，终帧与最后一帧一致。
 - 时长：元数据 `drawability.required_seconds` 是全部按人速画完所需，`minimum_seconds` 是全部线条（含细节和纹理线）按上限速度描完、再用最宽笔快速上色所需。窗口低于 `minimum_seconds` 时故事板检查报错，只能简化画面或延长窗口；介于两者之间时笔加速、顺序改为就近，但每一笔都画出来，没有淡入或整块显现（`drawn_stroke_count` 等于 `stroke_count`）。`python3 scripts/engine_metrics.py work/assets element-0007` 输出笔画长度、抬笔路径、跳笔、反向、速度变化和“首次可见即终色”等客观指标。
 
 汉字按规范笔顺手写：字形与笔画中线来自 Make Me a Hanzi（`assets/hanzi`，Arphic Public License），笔尖沿中线移动，笔画按经过的位置显现，逐笔抬笔，逐字从左到右；字形按所选字体的汉字高度和中心对齐，并略加粗以接近马克笔。包内含 GB2312 全部6763字；其他字首次使用时从 jsDelivr 固定版本下载到素材缓存，离线或无数据不报错。只要一行中有一个汉字缺数据，整行改用字体骨架描线（保持同一观感），资产元数据 `handwriting.mode/reason` 记录原因。拉丁字母、数字和标点沿字体路径，横向笔画从左到右、其余从上到下。每笔至少2帧、限速；`handwriting.natural_seconds/minimum_seconds` 给出自然与最低时长，分到的时间不足时整体压缩并在 build 时提示。笔顺要看得清，标题每字约需0.3—0.6秒，用 `weight` 给足时间。
@@ -92,17 +92,28 @@
 
 ### 页面设置
 
-页面可加 `camera` 关键帧数组，在整张画面上推近、移动：`{"at": 秒数或 "beat:<本页beat id>", "center": [x, y], "zoom": 1.0—1.3, "seconds": 0—3, "ease": "inout"|"linear", "follow": false}`。`at` 从本页开始计时，是移动开始时刻；`at` 为0的关键帧直接作为开页取景，其余在 `seconds`（默认0.8）内以缓入缓出滑到目标。`center` 默认画布中心，`zoom` 默认1；取景永远不出画布。`follow:true` 时镜头在该缩放内温和跟随笔尖。字幕和水印属于屏幕层，不随镜头缩放。
+页面可加 `camera` 关键帧数组，在整张画面上推近、移动：`{"at": 秒数或 "beat:<本页beat id>", "center": [x, y], "zoom": 1.0—3.0, "move": 命名运镜, "seconds": 0—3, "ease": 缓动名, "follow": false, "impact": 0—40, "hop": 0—0.6, "rotate", "shake"}`。命名运镜有 cut、push_in、pull_out、pan、drift、hop、whip、snap、slam，给出默认时长与缓动；缩放在对数空间插值。**大画板**：本页素材按本页最大 zoom 的倍数生成（`board.scale` 可显式指定，1—3），推近到该倍数仍是清晰的原尺寸画面，不是放大糊图。坐标仍按屏幕像素写，zoom 1 时整块画板缩进屏幕。典型用法：先以 1.6—2 倍逐个推近讲解，最后 `pull_out` 到 zoom 1，让观众看到整块"壁画"。`at` 从本页开始计时，是移动开始时刻；`at` 为 0 的关键帧直接作为开页取景。取景永远不出画布。`follow:true` 时镜头在该缩放内温和跟随笔尖。字幕和水印属于屏幕层，不随镜头缩放。
 
-页面可加 `transition` 描述进入本页的方式：`{"type": "slide"|"pan"|"cut"|"fade", "seconds": 0.3—1.0}`，首页不能设置。`pan` 把下一页放在同一块大白板的右侧，镜头带轻微拉远滑过去，两页同时可见；`slide` 两页并排平移；`fade` 交叉淡化；`cut` 直接切换。转场只放在上一页最后一笔之后、本页第一笔之前，空间不够时自动缩短；正在离场或入场的手跟随所属页面移动。不设置时保持旧行为：上一页最后0.24秒向左滑出。需要完整转场时给本页 visual group 的 `lead` 和上一页的 `hold` 各留至少一半转场时长。
+页面可加 `transition` 描述进入本页的方式，首页不能设置：`{"type": …, "seconds": …, "direction": "left"|"right"|"up"|"down", "style": …, "target": [x, y], "color": "#hex", "angle": 度}`。可用类型分五类：轻转场 cut、fade、slide、push、pan、wipe、zoom；纸张类 page_turn（四个方向）、slide_over、paper_tear、card_flip、cube、tiles、shards；擦除类 erase（style 为 felt 或 rubber）；墨与笔类 brush_reveal、marker_wipe、ink_bleed、iris（style 为 round 或 blot）；镜头和点缀类 zoom_through、whip、flash。转场只放在上一页最后一笔之后、本页第一笔之前，空间不够时自动缩短；正在离场或入场的手跟随所属页面移动。需要完整转场时，给本页 visual group 的 `lead` 和上一页的 `hold` 各留至少一半转场时长。每张卡的用途、参数和"不要用于"见[运镜、转场与动效目录](motion-catalog.md)；`build` 会按密度规则提示镜头过度和转场重复。
+
+`job.direction` 控制自动导演（`{"camera", "transitions", "motion": "auto"|"off", "boil": true}`，默认全 auto）：它只补模型没写的镜头、转场和画完后的轻动效，模型写了的一律保留。
+
+页面可加 `overlays` 网页动效层：大字、手绘图表、地图路线、形状接力、标注、气泡、滚动数字等，字段与配方见同一目录。需要先运行 `bash scripts/setup.sh --web-motion`。
 
 全片只有一支笔：同页相邻两笔间隔不超过1秒时手留在画面内，抬笔、停顿后以最小加加速度轨迹滑到下一笔；更长的停顿或换页时，手沿弧线从右下方离开、再沿弧线回到下一笔起点。手腕随平滑后的横向笔速最多转动约7°（绕笔尖旋转；会让前臂裁切边入画的转动自动收回），并带随抬笔轻微分离的柔和投影；`pen-only` 的投影从笔尖起、沿笔杆逐渐偏离，表示笔斜立在纸上。同组动作之间只隔约0.08秒，相距很远的两个动作之间笔仍会移动很快，排版时让相邻动作就近。
+
+### 强调动作、图表、箭头与数字
+
+- 任一元素可加 `motion: [{"type": …, "at": "beat:<本页beat id>" 或秒数, "seconds": 0.2—8, "strength": 1, "part": 部位 id}]`（旧字段 `emphasis` 仍可用）。类型分四族：强调、待机循环、退场、部位木偶，完整列表见[动效目录](motion-catalog.md)。强调和部位动作只在画完之后播放：对应句开始时还没画完，会自动推到最后一笔之后。
+- `{"type": "arrow"|"line", "points": [[x, y], ...], "curve": 0, "line_width": 5, "color": "#302C26", "head": "end"|"both"|"none"}`：由笔尖画出的线或箭头，先画杆、再画两侧箭头笔；两点时 `curve` 让它弯曲（正负决定方向）。
+- `{"type": "bar_chart", "x", "y", "width", "height", "values": [...], "labels": [...], "unit": "", "color" 或 "colors", "max"}`：构建时展开为"先画坐标轴，每根柱子由马克笔从底部涂上去并写上数值，最后写类别"，各部分按顺序分到时间。只用真实数据，不为好看编造数字。
+- `{"type": "counter", "from": 0, "to": 1.4, "decimals": 1, "prefix": "", "suffix": "万+", "x", "y", "size", "color"}`：数字从起点滚到终值后停住；它是排字动画，不经过画笔，可以代替一个手写数字标签。
 
 ## 手、字体和字幕
 
 六款手臂及仅画笔的 `hand.preset` 标识见 `assets/hands/catalog.json`。未选时使用模型根据内容准备的默认方案。`pen_text` 最多16个字符，这是格式上限。保留用户原文，按正常视频尺寸检查可读性；必要时调整笔杆排版，不擅自缩写广告名称。`pen_text_color` 可选。自定义手设置 `source/nib/wrist/label_segment/label_height`，提供实测锚点，源图前臂须延伸到底边；运行时自动限制最小尺度，使裁切边留在画外。新手图须同样经过美术指导和隐私清理。
 
-`font` 为 `{"path":"/actual/font.ttc","index":2}`。字幕按[字幕与片尾设计](subtitle-design.md)由模型独立决定。`captions` 支持 `font:{path,index}/font_size/color/bottom_margin/max_width_ratio/max_lines/stroke_width/stroke_color`，`background:null` 不生成底板；可选 `background:{color,opacity}` 轻度底板；不继承顶层手写字体。优先单行，最多两行。beat 可增加 `caption_cues:[{"text":"完整短句。","start":0,"end":2.5}]`，秒数相对母带对应 beat 的开始时间；生产字幕时间写在 alignment 对应 beat 中，所有文本拼接须与 beat 文本逐字一致；不需要为字幕重新生成或切割语音。字幕作为静态排字显示，不执行主笔描写。`paper` 为十六进制颜色。默认管线适合白底或透明底的清晰线稿，不保证复杂深色背景自动分离成功。
+`font` 为 `{"path":"/actual/font.ttc","index":2}`。字幕按[字幕与片尾设计](subtitle-design.md)由模型独立决定。`captions` 支持 `font:{path,index}/font_size/color/bottom_margin/max_width_ratio/max_lines/stroke_width/stroke_color`，以及 `strip_punctuation/keywords/highlight_numbers/highlight_color/max_chars`（beat 级 `caption_keywords`），默认值与竖屏安全区见字幕设计；`background:null` 不生成底板；可选 `background:{color,opacity}` 轻度底板；不继承顶层手写字体。优先单行，最多两行。beat 可增加 `caption_cues:[{"text":"完整短句。","start":0,"end":2.5}]`，秒数相对母带对应 beat 的开始时间；生产字幕时间写在 alignment 对应 beat 中，所有文本拼接须与 beat 文本逐字一致；不需要为字幕重新生成或切割语音。字幕作为静态排字显示，不执行主笔描写。`paper` 为十六进制颜色。默认管线适合白底或透明底的清晰线稿，不保证复杂深色背景自动分离成功。
 
 可用 `ending:{"fade_seconds":0.6}` 指定片尾渐隐到纸色；渐隐须完全位于最后一句结束后的停留区间内。`audio.end_hold_seconds` 默认0.45秒、范围0.2—0.8秒，默认不渐隐。总尾部静音不得超过1.2秒；详见[声音与收尾硬约束](audio-and-ending.md)。
 
@@ -121,6 +132,8 @@ python3 /path/to/skill/scripts/handdraw_video.py verify /path/to/job
 ```
 
 `doctor`中的 `ready` 表示已有任务输入可合成；`voice_studio.available` 单独表示新旁白服务是否可用，二者不能混用。
+
+渲染默认按时间切块多进程并行（`HANDDRAW_RENDER_WORKERS` 可指定进程数，默认核心数减2、最多8，每块不少于约8秒），各块独立编码后无重编码拼接；11分钟竖屏约2.5分钟渲完。
 
 先实际查看短段再导出整片。verify 完整解码并生成成片抽帧，只代表工程检查。按 [检查与返工](quality-gates.md) 填写检查证据后，才运行 `finalize`。它会拒绝未检查记录、哈希过期、用户已拒绝的视频和运行测试夹具。连续播放、听音没做时回执状态为 `delivery_review_completed_with_open_checks`。用户不接受成片时运行 `reject JOB --reason "…"`。
 

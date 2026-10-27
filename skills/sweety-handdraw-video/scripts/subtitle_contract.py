@@ -38,9 +38,13 @@ def caption_clearance(timeline, directory):
     """Artwork visible while a subtitle shows keeps clear of the subtitle's glyphs plus a margin. Checked on the real
     pixels at layout scale (camera moves aside): staying inside the canvas does not mean staying out of the subtitle."""
     margin, alpha, intruders = round(timeline['canvas']['height'] * .012), {}, {}
-    def opaque(name):
+    def opaque(name, scale=1.):
+        # Assets of a zoomed page are built at its board resolution; compare them at screen scale.
         if name not in alpha:
-            alpha[name] = np.array(Image.open(Path(directory) / f'{name}.png').getchannel('A')) > 24
+            image = Image.open(Path(directory) / f'{name}.png').getchannel('A')
+            if scale != 1.:
+                image = image.resize((max(1, round(image.width / scale)), max(1, round(image.height / scale))), Image.Resampling.BILINEAR)
+            alpha[name] = np.array(image) > 24
         return alpha[name]
     for page in timeline['pages']:
         captions = [event for event in page['events'] if event['caption']]
@@ -51,11 +55,12 @@ def caption_clearance(timeline, directory):
                 glyphs = Image.open(Path(directory) / f"{caption['asset']}.png").getchannel('A').getbbox()
                 if not glyphs:
                     continue
-                art = opaque(event['asset'])
-                left, top = max(caption['x'] + glyphs[0] - margin, event['x']), max(caption['y'] + glyphs[1] - margin, event['y'])
-                right = min(caption['x'] + glyphs[2] + margin, event['x'] + art.shape[1])
-                bottom = min(caption['y'] + glyphs[3] + margin, event['y'] + art.shape[0])
-                if left < right and top < bottom and art[top - event['y']:bottom - event['y'], left - event['x']:right - event['x']].any():
+                art = opaque(event['asset'], float(event.get('scale', 1.)))
+                x, y = round(event['x']), round(event['y'])
+                left, top = max(caption['x'] + glyphs[0] - margin, x), max(caption['y'] + glyphs[1] - margin, y)
+                right = min(caption['x'] + glyphs[2] + margin, x + art.shape[1])
+                bottom = min(caption['y'] + glyphs[3] + margin, y + art.shape[0])
+                if left < right and top < bottom and art[top - y:bottom - y, left - x:right - x].any():
                     asset = timeline['assets'][event['asset']]
                     label = (event.get('image') or [None])[0] or asset.get('text') or event['asset']
                     intruders.setdefault(label, (round(caption['start'], 2), timeline['assets'][caption['asset']]['text'], caption['y'] + glyphs[1] - margin))

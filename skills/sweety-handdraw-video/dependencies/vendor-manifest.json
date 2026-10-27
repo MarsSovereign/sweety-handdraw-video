@@ -301,28 +301,10 @@
         "sha256": "cc28d7e021d8bc094387f4e65627ad940417459250502e586e3f2fe9603ae841"
       },
       {
-        "upstream_path": "assets/动画语法/y4_storytime_总览.jpg",
-        "path": "assets/动画语法/y4_storytime_总览.jpg",
-        "upstream_sha256": "6cc308bee5624a6e11f063185af67bb1625332a44aabedb22f1329b1f60cfdc5",
-        "sha256": "6cc308bee5624a6e11f063185af67bb1625332a44aabedb22f1329b1f60cfdc5"
-      },
-      {
         "upstream_path": "assets/动画语法/y5_kinetic_type_总览.jpg",
         "path": "assets/动画语法/y5_kinetic_type_总览.jpg",
         "upstream_sha256": "fbc1612a831eeaa05f03bdef32b477dc459769834f57ad6331517ebfb92651b9",
         "sha256": "fbc1612a831eeaa05f03bdef32b477dc459769834f57ad6331517ebfb92651b9"
-      },
-      {
-        "upstream_path": "assets/角色/花叔形象_对比.jpg",
-        "path": "assets/角色/花叔形象_对比.jpg",
-        "upstream_sha256": "e2dd1082f5a6d6c66182b27b16a71ad9b6426e567ff4b406e4ebec007e044615",
-        "sha256": "e2dd1082f5a6d6c66182b27b16a71ad9b6426e567ff4b406e4ebec007e044615"
-      },
-      {
-        "upstream_path": "assets/长卷穿越_总览.jpg",
-        "path": "assets/长卷穿越_总览.jpg",
-        "upstream_sha256": "3f925f5637553c2b5bc57052f65f8065dbd14837c9881bb5d8e2bb898f29dba4",
-        "sha256": "3f925f5637553c2b5bc57052f65f8065dbd14837c9881bb5d8e2bb898f29dba4"
       },
       {
         "upstream_path": "defaults/media.json",
@@ -841,30 +823,6 @@
         "sha256": "7bf1d5ae2926de09f69431435e93ffa4c5357532b543217cd66bdc57e00256aa"
       },
       {
-        "upstream_path": "scripts/engine/demos/_shared/hero/c1_0.png",
-        "path": "scripts/engine/demos/_shared/hero/c1_0.png",
-        "upstream_sha256": "827032c6aa741f9895895224a67f81538d70ef970b10da6c3ee93e8deece3018",
-        "sha256": "827032c6aa741f9895895224a67f81538d70ef970b10da6c3ee93e8deece3018"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/_shared/hero/c1_1.png",
-        "path": "scripts/engine/demos/_shared/hero/c1_1.png",
-        "upstream_sha256": "9ab883b0af1460fae56970739ee82bdb8f59717ae2d3f11b56ca0b5088876c5e",
-        "sha256": "9ab883b0af1460fae56970739ee82bdb8f59717ae2d3f11b56ca0b5088876c5e"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/_shared/hero/c1_2.png",
-        "path": "scripts/engine/demos/_shared/hero/c1_2.png",
-        "upstream_sha256": "94882c9cbb1cc7ea82afb736412d388bfb06e30b08ffec861192443b9fb1c28c",
-        "sha256": "94882c9cbb1cc7ea82afb736412d388bfb06e30b08ffec861192443b9fb1c28c"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/_shared/hero/c3_line.png",
-        "path": "scripts/engine/demos/_shared/hero/c3_line.png",
-        "upstream_sha256": "b98528a02ccdfc1c7570e7a907990421d53d14e7f77068a31ba9ccfeb397a0da",
-        "sha256": "b98528a02ccdfc1c7570e7a907990421d53d14e7f77068a31ba9ccfeb397a0da"
-      },
-      {
         "upstream_path": "scripts/engine/demos/_shared/hero.js",
         "path": "scripts/engine/demos/_shared/hero.js",
         "upstream_sha256": "96e9e520d1139aa617be7ad01901f6a9b6c31c7948f73b33ddd8d646c6cdf967",
@@ -875,330 +833,6 @@
         "path": "scripts/engine/demos/long_scroll/eras.js",
         "upstream_sha256": "4c35e6e800f7d01a11f796fe052c11ca957c6c46665fd2b23927a8390357f617",
         "sha256": "4c35e6e800f7d01a11f796fe052c11ca957c6c46665fd2b23927a8390357f617"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/01.png",
-        "upstream_sha256": "74d6834868571bd257bffa91022aa649f0a80802d5b678ff59590539c99f7cf0",
-        "sha256": "74d6834868571bd257bffa91022aa649f0a80802d5b678ff59590539c99f7cf0"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/02.png",
-        "upstream_sha256": "19806884da80aba0b271556b529934359587b7e4a69bd6da7b57ccfd69bbeba6",
-        "sha256": "19806884da80aba0b271556b529934359587b7e4a69bd6da7b57ccfd69bbeba6"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/03.png",
-        "upstream_sha256": "598557fa4ba263ecd000398614e552f2afe04a148f957ef020bd05d32cccf2f3",
-        "sha256": "598557fa4ba263ecd000398614e552f2afe04a148f957ef020bd05d32cccf2f3"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/04.png",
-        "upstream_sha256": "fa08801ea3d6b79acafaa451ac697a060b059747ffd89c0375e6ee1b0901dbb3",
-        "sha256": "fa08801ea3d6b79acafaa451ac697a060b059747ffd89c0375e6ee1b0901dbb3"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/05.png",
-        "upstream_sha256": "469a75afeab1a7c9602f27a7f5f9fe74ae4c88227f22ba8977c1a72cb2beaab0",
-        "sha256": "469a75afeab1a7c9602f27a7f5f9fe74ae4c88227f22ba8977c1a72cb2beaab0"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/06.png",
-        "upstream_sha256": "1d26ed214328655a20233ec2b09e6181f431e1a4b40a2f308e4a03a8ac02f1b7",
-        "sha256": "1d26ed214328655a20233ec2b09e6181f431e1a4b40a2f308e4a03a8ac02f1b7"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/07.png",
-        "upstream_sha256": "867c900356062c27187298641969dfce81a1fbebed7808692759fba3fa74c4cb",
-        "sha256": "867c900356062c27187298641969dfce81a1fbebed7808692759fba3fa74c4cb"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/08.png",
-        "upstream_sha256": "ae74efabbd91cca2570d51c141672d991f6e895796dc01e81dc62099568d2f74",
-        "sha256": "ae74efabbd91cca2570d51c141672d991f6e895796dc01e81dc62099568d2f74"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_act/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_act/meta.json",
-        "upstream_sha256": "80dbaba87b9237958c392562338ac324687c50220ddb0c1572a8371f92131ff8",
-        "sha256": "80dbaba87b9237958c392562338ac324687c50220ddb0c1572a8371f92131ff8"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/01.png",
-        "upstream_sha256": "422152e3831b1df4fd5e2889b413ca6c84d1646b84dca704a9f7312cc4da6bf0",
-        "sha256": "422152e3831b1df4fd5e2889b413ca6c84d1646b84dca704a9f7312cc4da6bf0"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/02.png",
-        "upstream_sha256": "b5bcf6a167397e8b3c06a0f8570b2abccc55d5498390d9439b3a9f5f4c792ec4",
-        "sha256": "b5bcf6a167397e8b3c06a0f8570b2abccc55d5498390d9439b3a9f5f4c792ec4"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/03.png",
-        "upstream_sha256": "2d3670bc129660ef46836ec9091ec08162119e7925825734821f3aed8f470700",
-        "sha256": "2d3670bc129660ef46836ec9091ec08162119e7925825734821f3aed8f470700"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/04.png",
-        "upstream_sha256": "fed712a2565ddde80c82f829bd6eeddc96eaa53193b0bfd21398460f21cb558a",
-        "sha256": "fed712a2565ddde80c82f829bd6eeddc96eaa53193b0bfd21398460f21cb558a"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/05.png",
-        "upstream_sha256": "b5a663297f578133699fa6d345b9c2d36634722ecb1bc5e3a642be5b85cf6b24",
-        "sha256": "b5a663297f578133699fa6d345b9c2d36634722ecb1bc5e3a642be5b85cf6b24"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/06.png",
-        "upstream_sha256": "5ae2393b76809bb3dbc929d3def67802fd2889ab12799faaceb68077e471c3d2",
-        "sha256": "5ae2393b76809bb3dbc929d3def67802fd2889ab12799faaceb68077e471c3d2"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/07.png",
-        "upstream_sha256": "69a61db4c6910896790bf93b4d661a4860928cdb52cdccbfd4d5a94055f9b81e",
-        "sha256": "69a61db4c6910896790bf93b4d661a4860928cdb52cdccbfd4d5a94055f9b81e"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/08.png",
-        "upstream_sha256": "62afb8496eebe9c0f58790d85835ebc9a0502a341c2a5c92fc81a90ee4cde0a6",
-        "sha256": "62afb8496eebe9c0f58790d85835ebc9a0502a341c2a5c92fc81a90ee4cde0a6"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/8bit_walk/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/8bit_walk/meta.json",
-        "upstream_sha256": "3391931eb00392c13c9d6d555292c5c6ed62ee1761a74160bc0b791669784891",
-        "sha256": "3391931eb00392c13c9d6d555292c5c6ed62ee1761a74160bc0b791669784891"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/01.png",
-        "upstream_sha256": "298d124a5201b9a6c2d2957471163ab9ead605690f14e1d0737f566a37d5ff0b",
-        "sha256": "298d124a5201b9a6c2d2957471163ab9ead605690f14e1d0737f566a37d5ff0b"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/02.png",
-        "upstream_sha256": "d7849492606178176783bebb932a593a8b84fa1d68e1669c1fd801e1f9646426",
-        "sha256": "d7849492606178176783bebb932a593a8b84fa1d68e1669c1fd801e1f9646426"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/03.png",
-        "upstream_sha256": "282257c1b3f10db6813428e19e2cd118ad1367dd2ee119edd103908930a8bfe0",
-        "sha256": "282257c1b3f10db6813428e19e2cd118ad1367dd2ee119edd103908930a8bfe0"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/04.png",
-        "upstream_sha256": "277517af7b758bb9ffc2d45267de6cdf5a405bb80aee1aa5569298248414a0b1",
-        "sha256": "277517af7b758bb9ffc2d45267de6cdf5a405bb80aee1aa5569298248414a0b1"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/05.png",
-        "upstream_sha256": "d3dbc34b29655a57cb26ea7886067b1539d97f317aef3cc29ab9c88e8018ee71",
-        "sha256": "d3dbc34b29655a57cb26ea7886067b1539d97f317aef3cc29ab9c88e8018ee71"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/06.png",
-        "upstream_sha256": "0a50ce8323e4adb48c06ea493d5c6ee471a80c2028670b82b6266b5bd8451fa8",
-        "sha256": "0a50ce8323e4adb48c06ea493d5c6ee471a80c2028670b82b6266b5bd8451fa8"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/07.png",
-        "upstream_sha256": "114f1aaaf3c157d0aa6ea6437261888e40b224cf3a4b9bff47a4b8e19e382177",
-        "sha256": "114f1aaaf3c157d0aa6ea6437261888e40b224cf3a4b9bff47a4b8e19e382177"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/08.png",
-        "upstream_sha256": "1716833fa180c6d3aac3ffd4b884a8fe0029438f676619cd5194a820d9ed083e",
-        "sha256": "1716833fa180c6d3aac3ffd4b884a8fe0029438f676619cd5194a820d9ed083e"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_dodge/meta.json",
-        "upstream_sha256": "7706f4d79fa8c336e31d7c2570b47d29d3b90b2e11ac9905323df1912493e8b5",
-        "sha256": "7706f4d79fa8c336e31d7c2570b47d29d3b90b2e11ac9905323df1912493e8b5"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/01.png",
-        "upstream_sha256": "7500fb8df1c49afde25c8f7ff0d082de925373f4548679ab6a9788b405aa17a4",
-        "sha256": "7500fb8df1c49afde25c8f7ff0d082de925373f4548679ab6a9788b405aa17a4"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/02.png",
-        "upstream_sha256": "7e9b5b0f6b6c78a6f4562f0c753663e909e7a0b8324fd17cb4bf0ff4d151f90a",
-        "sha256": "7e9b5b0f6b6c78a6f4562f0c753663e909e7a0b8324fd17cb4bf0ff4d151f90a"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/03.png",
-        "upstream_sha256": "a0cfc27ca9b366ee07af25bfdcb2b030702945bd7ad039f9d0333d77cc3998a8",
-        "sha256": "a0cfc27ca9b366ee07af25bfdcb2b030702945bd7ad039f9d0333d77cc3998a8"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/04.png",
-        "upstream_sha256": "234955761a0485643b4310d646ab23d02c0afda2f9cae98f1e83c5384eea7ab4",
-        "sha256": "234955761a0485643b4310d646ab23d02c0afda2f9cae98f1e83c5384eea7ab4"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/05.png",
-        "upstream_sha256": "977c7a00b05e1394391d17e74a9aa312f5a8d1f524f3b938ec1373948099e4df",
-        "sha256": "977c7a00b05e1394391d17e74a9aa312f5a8d1f524f3b938ec1373948099e4df"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/06.png",
-        "upstream_sha256": "c09db144378ffc255e2ec1b3d8bdf1936e7e18f4f2496cad61d4138d5d5b7304",
-        "sha256": "c09db144378ffc255e2ec1b3d8bdf1936e7e18f4f2496cad61d4138d5d5b7304"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/07.png",
-        "upstream_sha256": "1e6286142b4457fbd35014b813742da0bd42771524823067142186cc280a1725",
-        "sha256": "1e6286142b4457fbd35014b813742da0bd42771524823067142186cc280a1725"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/08.png",
-        "upstream_sha256": "46dccbe4ede8a6c0620ad0ca96b4413ded56d7033cbbeffb8985588257c2d842",
-        "sha256": "46dccbe4ede8a6c0620ad0ca96b4413ded56d7033cbbeffb8985588257c2d842"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/egypt_walk8/meta.json",
-        "upstream_sha256": "9df61edb22b06ad111462082881fca88427909c0540f33aeef71ccbd44dff3d6",
-        "sha256": "9df61edb22b06ad111462082881fca88427909c0540f33aeef71ccbd44dff3d6"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/01.png",
-        "upstream_sha256": "6777d07ffceee31b1f0a2da4e9b68f74f74bf648282dae517fe4b2aecd244553",
-        "sha256": "6777d07ffceee31b1f0a2da4e9b68f74f74bf648282dae517fe4b2aecd244553"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/02.png",
-        "upstream_sha256": "f594484eeaa48fe388986f78e940ecaf896a3fb3a21b2fd9cf05449dca04e923",
-        "sha256": "f594484eeaa48fe388986f78e940ecaf896a3fb3a21b2fd9cf05449dca04e923"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/03.png",
-        "upstream_sha256": "2490009faffca1452c7b2cecd5d4525b8f2921b60d46dd85b18dd50c0ffd7433",
-        "sha256": "2490009faffca1452c7b2cecd5d4525b8f2921b60d46dd85b18dd50c0ffd7433"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/04.png",
-        "upstream_sha256": "150ef0221b74b27fcf7a9873df41df4a11a3ab2bfec21b7fd3964a596427481c",
-        "sha256": "150ef0221b74b27fcf7a9873df41df4a11a3ab2bfec21b7fd3964a596427481c"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/05.png",
-        "upstream_sha256": "5aabc6f6164b99063eb8a8bd27cbc77de062f415179ec14fc8c44bb264e380af",
-        "sha256": "5aabc6f6164b99063eb8a8bd27cbc77de062f415179ec14fc8c44bb264e380af"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/06.png",
-        "upstream_sha256": "175c1ee674743544b28dd2e04ad8dd26ea89a1f664cd31706c7270442a68368d",
-        "sha256": "175c1ee674743544b28dd2e04ad8dd26ea89a1f664cd31706c7270442a68368d"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/07.png",
-        "upstream_sha256": "adb52ccb864ded668d02c17aa9d21acabc4c6c695561f5c7e221fee8fd8d711f",
-        "sha256": "adb52ccb864ded668d02c17aa9d21acabc4c6c695561f5c7e221fee8fd8d711f"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/08.png",
-        "upstream_sha256": "a5befb97ddc1c17962011fd1b366c6c087c2fdc5ea4104f00f01ad0fb83a7fe8",
-        "sha256": "a5befb97ddc1c17962011fd1b366c6c087c2fdc5ea4104f00f01ad0fb83a7fe8"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_throw/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_throw/meta.json",
-        "upstream_sha256": "01db607f2fa4e10998628a4f2b1c1ba184915d76070be2b9e92051527cd2d5cc",
-        "sha256": "01db607f2fa4e10998628a4f2b1c1ba184915d76070be2b9e92051527cd2d5cc"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/01.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/01.png",
-        "upstream_sha256": "0e58b3f88bddb5d2488f59846a844f4bcf62f94e860eea7598e4e011de6ab9d9",
-        "sha256": "0e58b3f88bddb5d2488f59846a844f4bcf62f94e860eea7598e4e011de6ab9d9"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/02.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/02.png",
-        "upstream_sha256": "30ee4cf8e6e594115a8e13dca65728936d70fefdc189fec970bdd96c3635c618",
-        "sha256": "30ee4cf8e6e594115a8e13dca65728936d70fefdc189fec970bdd96c3635c618"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/03.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/03.png",
-        "upstream_sha256": "cff12f6a7fca6a001c995ea01d1fc194318856de38c97464dcd4a1b216d32986",
-        "sha256": "cff12f6a7fca6a001c995ea01d1fc194318856de38c97464dcd4a1b216d32986"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/04.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/04.png",
-        "upstream_sha256": "588a7a28307b1684522ecd3d7e39a3ab4d8ea42dfc0c8596236286a084f883c0",
-        "sha256": "588a7a28307b1684522ecd3d7e39a3ab4d8ea42dfc0c8596236286a084f883c0"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/05.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/05.png",
-        "upstream_sha256": "7f0828088ba1dfde2821c3cd6d4b3c2f3435cc3176c3713b683ea1a4004d29b9",
-        "sha256": "7f0828088ba1dfde2821c3cd6d4b3c2f3435cc3176c3713b683ea1a4004d29b9"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/06.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/06.png",
-        "upstream_sha256": "d66fac1d04408e301dd9cf65eff68e0e7c6d3147103e9f775a413854ae0afeeb",
-        "sha256": "d66fac1d04408e301dd9cf65eff68e0e7c6d3147103e9f775a413854ae0afeeb"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/07.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/07.png",
-        "upstream_sha256": "75f1e003de49fa658f0b74f7d0e916503993ae838d02cb99f0b04d0286821477",
-        "sha256": "75f1e003de49fa658f0b74f7d0e916503993ae838d02cb99f0b04d0286821477"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/08.png",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/08.png",
-        "upstream_sha256": "4924bafb390350414c100c52043942b6ca7e2978dd9e20446b2ae65ca0d37392",
-        "sha256": "4924bafb390350414c100c52043942b6ca7e2978dd9e20446b2ae65ca0d37392"
-      },
-      {
-        "upstream_path": "scripts/engine/demos/long_scroll/frames/monet_walk/meta.json",
-        "path": "scripts/engine/demos/long_scroll/frames/monet_walk/meta.json",
-        "upstream_sha256": "fef96b1af712cb3f09b9ee3f987b6e97ae24bac2366e78878796045dd60856e8",
-        "sha256": "fef96b1af712cb3f09b9ee3f987b6e97ae24bac2366e78878796045dd60856e8"
       },
       {
         "upstream_path": "scripts/engine/demos/long_scroll/lib/acts.js",
@@ -2779,7 +2413,71 @@
       "assets/showcase/monet.gif",
       "assets/showcase/pixel.gif"
     ],
-    "adaptation": "Nested SKILL.md renamed GUIDE.md and textual references updated; no nested installable skills. License files preserved."
+    "adaptation": "Nested SKILL.md renamed GUIDE.md and textual references updated; no nested installable skills. License files preserved.",
+    "omitted_restricted_artwork": [
+      "assets/动画语法/y4_storytime_总览.jpg",
+      "assets/角色/花叔形象_对比.jpg",
+      "assets/长卷穿越_总览.jpg",
+      "scripts/engine/demos/_shared/hero/c1_0.png",
+      "scripts/engine/demos/_shared/hero/c1_1.png",
+      "scripts/engine/demos/_shared/hero/c1_2.png",
+      "scripts/engine/demos/_shared/hero/c3_line.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/01.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/02.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/03.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/04.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/05.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/06.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/07.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/08.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_act/meta.json",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/01.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/02.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/03.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/04.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/05.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/06.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/07.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/08.png",
+      "scripts/engine/demos/long_scroll/frames/8bit_walk/meta.json",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/01.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/02.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/03.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/04.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/05.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/06.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/07.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/08.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_dodge/meta.json",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/01.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/02.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/03.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/04.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/05.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/06.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/07.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/08.png",
+      "scripts/engine/demos/long_scroll/frames/egypt_walk8/meta.json",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/01.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/02.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/03.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/04.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/05.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/06.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/07.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/08.png",
+      "scripts/engine/demos/long_scroll/frames/monet_throw/meta.json",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/01.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/02.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/03.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/04.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/05.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/06.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/07.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/08.png",
+      "scripts/engine/demos/long_scroll/frames/monet_walk/meta.json"
+    ],
+    "restricted_artwork_note": "Upstream README: the Huashu character artwork (demos/_shared/hero, long_scroll/frames, assets/角色 and overview images showing the character) is for that skill's demos only and is not MIT-licensed, so it is not redistributed. Demos that load these frames need your own character art."
   },
   {
     "name": "omniailab-ai-director",

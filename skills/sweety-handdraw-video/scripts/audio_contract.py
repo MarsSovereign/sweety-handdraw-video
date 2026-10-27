@@ -8,11 +8,22 @@ import numpy as np
 def resolve_audio_layers(root, manifest):
     options = manifest.get('audio', {})
     music = options.get('music', None)
+    from foley import parse_options
+    parse_options(options.get('foley'))  # fail early on a bad audio.foley; the layer itself needs the finished timeline
     layers = []
     if music not in (None, False):
         if not isinstance(music, dict) or not music.get('user_instruction'):
             raise ValueError('Background music is off by default and needs an explicit user instruction')
         layer = {**music, 'kind': 'music', 'start': 0.}
+        from music_synth import parse_source, render_source, DEFAULT_GAIN
+        if parse_source(music.get('source')):
+            # builtin:<mood> is composed and played by music_synth.py at the narration's length, then prepared
+            # (fades, sidechain ducking, dips) exactly like a user's file. Nothing is sampled.
+            if music.get('prepared'):
+                raise ValueError('Builtin music is always prepared by the build; remove prepared:true')
+            generated, record = render_source(Path(root) / 'work', music)
+            layer.update(source=str(generated), builtin=record)
+            layer.setdefault('gain', DEFAULT_GAIN)
         if not music.get('prepared'):
             # The raw source becomes a deterministic bed during build: loop crossfade, fades, sidechain
             # under the narration and optional dips (music_bed.py). prepared:true keeps a host-made bed.
@@ -35,11 +46,14 @@ def resolve_audio_layers(root, manifest):
             raise ValueError('Audio layers need an existing source, a nonnegative time and gain within (0, .3]')
         if layer['kind'] == 'effect' and layer['beat_id'] not in beat_ids:
             raise ValueError('Sound effect points to an unknown narration beat')
+        from audio_gate import layer_levels
         resolved.append({**layer, 'source': str(source), 'start': start, 'gain': gain,
-                         'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
+                         'sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'levels': layer_levels(source, gain)})
+    builtin = next((layer['builtin']['mood'] for layer in resolved if layer.get('builtin')), None)
     return {'background_music': any(layer['kind'] == 'music' for layer in resolved),
             'layers': resolved,
-            'delivery_notice': '默认未添加背景音乐；可自行合成，或在发布平台选择配乐。' if not music else '按用户明确要求加入了背景音乐。'}
+            'delivery_notice': '默认未添加背景音乐；可自行合成，或在发布平台选择配乐。' if not music else
+                               f'按用户明确要求加入了程序合成的背景音乐（builtin:{builtin}）。' if builtin else '按用户明确要求加入了背景音乐。'}
 
 
 def measure_voice_tail(samples, sample_rate):

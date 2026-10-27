@@ -37,7 +37,8 @@ def check_record(record_path, required, dependency_hash, style_hash=None):
             raise ValueError('Image has no completed art-direction review: '+str(source))
         if entry.get('sha256')!=digest(resolve_asset(source)):
             raise ValueError('Image changed after art-direction review: '+str(source))
-        if entry.get('method') not in ('generated_under_guidance','composed_with_verified_layers'):
+        # library_reuse: an approved image from the local library (asset_library.py), reviewed again for this film.
+        if entry.get('method') not in ('generated_under_guidance','composed_with_verified_layers','library_reuse'):
             raise ValueError('Image lacks a supported guided-generation/composition method')
         regions=entry.get('approved_crops')
         if regions is not None and (crop is None or list(crop) not in regions):

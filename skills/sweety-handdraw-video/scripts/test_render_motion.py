@@ -111,10 +111,16 @@ class RenderMotionTests(unittest.TestCase):
         page = {'start': 1., 'end': 4., 'beats': [{'id': 'a'}]}
         self.assertTrue(validate_page_motion({**page, 'camera': [{'at': 'beat:a', 'zoom': 1.2, 'follow': True}],
                                               'transition': {'type': 'pan', 'seconds': .8}}, canvas))
-        for bad, message in [({'camera': [{'zoom': 1.6}]}, 'zoom'), ({'camera': [{'at': 'beat:x'}]}, 'beat'),
+        # Boards are drawn at up to 3x resolution, so close-ups to 3x stay sharp; erasing takes longer than a camera move.
+        for good in ({'camera': [{'zoom': 2.5}]}, {'transition': {'type': 'erase', 'seconds': 1.5}},
+                     {'transition': {'type': 'wipe', 'direction': 'up'}}, {'transition': {'type': 'zoom'}}):
+            self.assertTrue(validate_page_motion({**page, **good}, canvas))
+        for bad, message in [({'camera': [{'zoom': 3.2}]}, 'zoom'), ({'camera': [{'at': 'beat:x'}]}, 'beat'),
                              ({'camera': [{'at': 5}]}, 'inside the page'), ({'camera': [{'center': [900, 10]}]}, 'center'),
                              ({'camera': [{'ease': 'bounce'}]}, 'ease'), ({'camera': {'at': 0}}, 'list'),
-                             ({'transition': {'type': 'wipe'}}, 'Transition'), ({'transition': {'type': 'fade', 'seconds': 2}}, 'seconds')]:
+                             ({'transition': {'type': 'spin'}}, 'Transition'), ({'transition': {'type': 'fade', 'seconds': 2}}, 'seconds'),
+                             ({'transition': {'type': 'erase', 'seconds': 2.5}}, 'seconds'),
+                             ({'transition': {'type': 'wipe', 'direction': 'diagonal'}}, 'direction')]:
             with self.assertRaisesRegex(ValueError, message):
                 validate_page_motion({**page, **bad}, canvas)
         with self.assertRaisesRegex(ValueError, 'first page'):

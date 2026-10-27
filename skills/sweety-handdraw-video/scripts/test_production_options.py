@@ -16,10 +16,10 @@ from presentation import validate_presentation, MODES, page_content_policy
 
 
 class AspectRatioTests(unittest.TestCase):
-    def test_default_is_vertical_nine_sixteen(self):
+    def test_default_is_vertical_two_three(self):
         canvas = resolve_canvas()
-        self.assertEqual(canvas['aspect_ratio'], '9:16')
-        self.assertEqual((canvas['width'], canvas['height']), (1080, 1920))
+        self.assertEqual(canvas['aspect_ratio'], '2:3')
+        self.assertEqual((canvas['width'], canvas['height']), (1280, 1920))
 
     def test_named_presets_and_custom(self):
         for name, size in PRESETS.items():

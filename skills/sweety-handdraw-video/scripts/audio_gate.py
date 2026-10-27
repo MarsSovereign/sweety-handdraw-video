@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import wave
 import numpy as np
 from scipy import signal
 from scipy.ndimage import median_filter
@@ -109,6 +110,179 @@ def require_clean(source, context, label=None, short_clip=False):
         raise ValueError(f"{context}: audio gate FAIL ({'; '.join(report['failures'])}). "
                          '参考音频请先用 scripts/clean_reference.py 分离人声/降噪并重新导入；生成的旁白请重新生成该段。')
     return report
+
+
+# ITU-R BS.1770 K-weighting at 48 kHz (pre-filter shelf, then RLB high-pass).
+K_SHELF = ([1.53512485958697, -2.69169618940638, 1.19839281085285], [1., -1.69065929318241, .73248077421585])
+K_HIGHPASS = ([1., -2., 1.], [1., -1.99004745483398, .99007225036621])
+# A layered mix (narration + foley/music/effects) is accepted when the narration is provably intact inside it:
+# mix minus the known layers must equal the normalized narration (dual mono) to within these limits.
+MAX_NARRATION_RESIDUAL_DB = -30.   # residual RMS relative to the narration RMS
+MIN_NARRATION_CORRELATION = .999
+MAX_NARRATION_GAIN_ERROR_DB = .5
+MIN_VOICE_MARGIN_DB = 6.           # narration over all layers, both measured on speech frames
+
+
+def finite(value):
+    return value if np.isfinite(value) else None
+
+
+def db(value):
+    return round(float(20 * np.log10(max(float(value), 1e-12))), 2)
+
+
+def loudness_lufs(samples, rate=SAMPLE_RATE):
+    """Integrated loudness (BS.1770-4: K-weighting, 400 ms blocks, -70 LUFS absolute and -10 LU relative gates).
+    Mono input counts once; stereo sums both channels, so dual-mono measures 3 LU louder than its mono source."""
+    if rate != SAMPLE_RATE:
+        raise ValueError('loudness_lufs uses the 48 kHz K-weighting coefficients')
+    x = np.asarray(samples)
+    x = x[:, None] if x.ndim == 1 else x
+    block, hop = round(.4 * rate), round(.1 * rate)
+    if len(x) < block:
+        return float('-inf')
+    energy = np.zeros(len(x) + 1)
+    for channel in range(x.shape[1]):  # one channel at a time keeps long films within memory
+        weighted = signal.lfilter(*K_HIGHPASS, signal.lfilter(*K_SHELF, x[:, channel].astype(np.float64)))
+        energy[1:] += np.cumsum(weighted ** 2)
+    starts = np.arange(0, len(x) - block + 1, hop)
+    power = (energy[starts + block] - energy[starts]) / block
+    level = -.691 + 10 * np.log10(power + 1e-30)
+    power = power[level > -70]
+    if not len(power):
+        return float('-inf')
+    relative = -.691 + 10 * np.log10(power.mean()) - 10
+    power = power[-.691 + 10 * np.log10(power) > relative]
+    return round(float(-.691 + 10 * np.log10(power.mean())), 2)
+
+
+def speech_frames(narration, frame=.02, hop=.01):
+    """Frames where the narration speaks, by the same relative rule align.activity uses for caption timing."""
+    levels = 20 * np.log10(frame_levels(np.asarray(narration, dtype=np.float64), frame, hop) + 1e-9)
+    if not len(levels):
+        return np.zeros(0, dtype=bool)
+    return levels > max(np.percentile(levels, 95) - 35, np.percentile(levels, 10) + 6)
+
+
+def framed_rms(x, mask, frame=.02, hop=.01):
+    levels = frame_levels(x, frame, hop)[:len(mask)]
+    selected = levels[mask[:len(levels)]]
+    return float(np.sqrt(np.mean(selected ** 2))) if len(selected) else 0.
+
+
+def framed_activity(x, count, threshold=1e-5, hop=.01):
+    """Per 20 ms analysis frame (10 ms hop): does the signal rise above threshold anywhere inside it."""
+    step = round(hop * SAMPLE_RATE)
+    loud = np.abs(x) > threshold
+    blocks = np.zeros(count + 1, dtype=bool)
+    usable = min(len(loud) // step, count + 1)
+    blocks[:usable] = loud[:usable * step].reshape(usable, step).any(axis=1)
+    return blocks[:count] | blocks[1:count + 1]
+
+
+def decode_layer(path, rate=SAMPLE_RATE):
+    """Stereo float samples exactly as the renderer's mixer reads a layer (aformat=channel_layouts=stereo)."""
+    command = ['ffmpeg', '-v', 'error', '-i', str(path), '-af', 'aformat=channel_layouts=stereo', '-ar', str(rate), '-f', 'f32le', '-']
+    return np.frombuffer(subprocess.run(command, capture_output=True, check=True).stdout, '<f4').reshape(-1, 2)
+
+
+def layer_levels(path, gain):
+    """Peak and integrated loudness of a layer file at its mixer gain (what audio-mix-report.json records)."""
+    samples = decode_layer(path) * np.float32(gain)
+    loudness = loudness_lufs(samples)
+    return {'peak_dbfs': db(np.abs(samples).max()) if len(samples) and np.any(samples) else None,
+            'loudness_lufs': loudness if np.isfinite(loudness) else None}
+
+
+def place_layer(layer, frames, rate=SAMPLE_RATE, samples=None):
+    """One layer at its mixer gain and start (adelay works in whole milliseconds), cut to the narration length."""
+    samples = decode_layer(layer['source'], rate) if samples is None else samples
+    placed = np.zeros((frames, 2), dtype=np.float32)
+    offset = round(float(layer.get('start', 0)) * 1000) * rate // 1000
+    count = max(0, min(len(samples), frames - offset))
+    placed[offset:offset + count] = np.float32(layer['gain']) * samples[:count]
+    return placed
+
+
+def read_pcm(path):
+    """16-bit PCM wav as float32 frames x channels (mono stays 1-D)."""
+    with wave.open(str(path), 'rb') as stream:
+        if stream.getsampwidth() != 2:
+            raise ValueError(f'{path}: expected 16-bit PCM')
+        channels = stream.getnchannels()
+        samples = np.frombuffer(stream.readframes(stream.getnframes()), '<i2').astype(np.float32) / 32768
+    return samples if channels == 1 else samples.reshape(-1, channels)
+
+
+def measure_layered_mix(narration, mix, layers, rate=SAMPLE_RATE):
+    """Gate for a mix with intended layers (foley, music, effects).
+
+    The narration stem keeps the full narration gate (hum, pause depth, DC, clipping). The mix must equal the stem
+    (dual mono, unity gain) plus the known layers, so the voice in the film is provably the gated stem, intact; the
+    non-music part of the mix must hold no stationary tone (foley and effects never hum); the mix must not clip or
+    carry DC; and the layers must stay MIN_VOICE_MARGIN_DB under the voice while it speaks. Music is exempt from the
+    tone check only: it is tonal by design and was requested by the user."""
+    narration = np.asarray(narration, dtype=np.float32)
+    mix = np.asarray(mix, dtype=np.float32)
+    stem = measure(narration.astype(np.float64), 'work/normalized-narration.wav')
+    failures = [f'narration stem: {failure}' for failure in stem['failures']]
+    if abs(len(narration) - len(mix)) > rate // 100:
+        failures.append(f'mix length differs from the narration by {abs(len(narration) - len(mix)) / rate:.3f}s')
+    frames = min(len(narration), len(mix))
+    narration, mix = narration[:frames], mix[:frames]
+    placed = [place_layer(layer, frames, rate) for layer in layers]
+    known = np.sum(placed, axis=0, dtype=np.float32) if placed else np.zeros((frames, 2), np.float32)
+    recovered = mix - known
+    reference = float(np.sqrt(np.mean(narration.astype(np.float64) ** 2))) + 1e-12
+    residual = float(np.sqrt(np.mean((recovered - narration[:, None]).astype(np.float64) ** 2)))
+    side = float(np.sqrt(np.mean(((recovered[:, 0] - recovered[:, 1]) / 2).astype(np.float64) ** 2)))
+    middle = recovered.mean(axis=1, dtype=np.float64)
+    del recovered
+    correlation = float(np.corrcoef(middle, narration)[0, 1]) if np.std(middle) > 0 else 0.
+    gain = float(np.dot(middle, narration) / max(float(np.dot(narration, narration)), 1e-12))
+    del middle
+    speaking = speech_frames(narration)
+    voice = framed_rms(narration, speaking)
+    music = [index for index, layer in enumerate(layers) if layer.get('kind') == 'music']
+    nonmusic = mix.mean(axis=1, dtype=np.float64) - sum((placed[index].mean(axis=1, dtype=np.float64) for index in music), np.zeros(frames))
+    clipped = float(np.mean(np.abs(mix) >= CLIP_LEVEL))
+    beds = framed_rms(known.mean(axis=1, dtype=np.float64), speaking)
+    report = {'narration_residual_db': db(residual / reference), 'narration_side_db': db(side / reference),
+              'narration_correlation': round(correlation, 6), 'narration_gain_db': db(gain) if gain > 0 else None,
+              'tonal_lines_without_music_hz_persistence': tonal_lines(nonmusic),
+              'peak_dbfs': db(np.abs(mix).max()), 'clipped_fraction': clipped,
+              'dc_offset': [round(float(value), 5) for value in mix.mean(axis=0, dtype=np.float64)],
+              'loudness_lufs': loudness_lufs(mix, rate), 'narration_loudness_lufs': loudness_lufs(narration, rate),
+              'narration_speech_rms_dbfs': db(voice), 'layers_speech_rms_dbfs': db(beds),
+              'voice_margin_db': round(db(voice) - db(beds), 2)}
+    del nonmusic
+    if report['narration_residual_db'] > MAX_NARRATION_RESIDUAL_DB:
+        failures.append(f"narration is not intact in the mix (residual {report['narration_residual_db']} dB)")
+    if correlation < MIN_NARRATION_CORRELATION:
+        failures.append(f'mix minus layers no longer matches the narration (correlation {correlation:.4f})')
+    if gain <= 0 or abs(report['narration_gain_db']) > MAX_NARRATION_GAIN_ERROR_DB:
+        failures.append(f"narration gain changed in the mix ({report['narration_gain_db']} dB)")
+    if report['tonal_lines_without_music_hz_persistence']:
+        failures.append('stationary tone/hum outside the music at ' + ', '.join(
+            f'{hz:.0f} Hz' for hz, _ in report['tonal_lines_without_music_hz_persistence']))
+    if clipped > MAX_CLIPPED_FRACTION:
+        failures.append(f'mix clips in {clipped:.2%} of samples')
+    if max(abs(value) for value in report['dc_offset']) > MAX_DC_OFFSET:
+        failures.append(f"mix DC offset {report['dc_offset']}")
+    if report['voice_margin_db'] < MIN_VOICE_MARGIN_DB:
+        failures.append(f"layers mask the voice: only {report['voice_margin_db']} dB under the narration while it speaks")
+    entries = []
+    for layer, alone in zip(layers, placed):
+        middle = alone.mean(axis=1, dtype=np.float64)
+        active = framed_activity(middle, len(speaking))
+        during, between = framed_rms(middle, speaking & active), framed_rms(middle, ~speaking & active)
+        entries.append({'kind': layer.get('kind'), 'source': Path(layer['source']).name, 'gain': layer['gain'],
+                        'start': layer.get('start', 0), 'peak_dbfs': db(np.abs(alone).max()),
+                        'loudness_lufs': finite(loudness_lufs(alone, rate)), 'active_share': round(float(active.mean()), 3) if len(active) else 0.,
+                        'speech_rms_dbfs': db(during) if during else None, 'pause_rms_dbfs': db(between) if between else None,
+                        'pause_minus_speech_db': round(db(between) - db(during), 2) if during and between else None})
+    return {'source': f"work/mix.wav (narration + {len(layers)} layer{'s' if len(layers) != 1 else ''})", 'narration': stem,
+            'mix': report, 'layers': entries, 'status': 'FAIL' if failures else 'PASS', 'failures': failures}
 
 
 if __name__ == '__main__':

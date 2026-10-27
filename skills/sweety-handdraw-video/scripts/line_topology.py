@@ -158,8 +158,10 @@ def split_for_hand(points, corner=120., maximum=MAX_STROKE):
     return result
 
 
-def extract_strokes(outline, support=None):
-    """Return whole strokes [{'points','radius','closed','micro'}] for an outline mask, and statistics."""
+def extract_strokes(outline, support=None, size=1.):
+    """Return whole strokes [{'points','radius','closed','micro'}] for an outline mask, and statistics.
+    size: how much larger than the calibration size the picture is drawn (line_drawing.picture_size); a hand re-grips
+    after a proportionally longer run on a larger picture."""
     clean = clean_outline(outline)
     if not clean.any():
         clean = outline.copy()
@@ -183,7 +185,7 @@ def extract_strokes(outline, support=None):
         if len(path) > 9:
             path = np.r_[path[:1], ndimage.uniform_filter1d(path, 5, axis=0, mode='nearest')[1:-1], path[-1:]]
         closed = len(path) > 8 and np.linalg.norm(path[0] - path[-1]) <= 1.5
-        for piece in ([path] if micro else split_for_hand(path)):
+        for piece in ([path] if micro else split_for_hand(path, maximum=MAX_STROKE * size)):
             cells = np.clip(np.rint(piece).astype(int), 0, [clean.shape[1] - 1, clean.shape[0] - 1])
             radius = ndimage.uniform_filter1d(np.clip(half_width[cells[:, 1], cells[:, 0]] - .6, .6, 5.), 7, mode='nearest')
             strokes.append({'points': piece, 'radius': radius, 'closed': bool(closed and len(piece) == len(path)),
@@ -243,6 +245,16 @@ def cover_ink_edges(strokes, visible_ink, maximum=8., support=None):
                 for y, x in parents:
                     component[y, x] = visible_ink[y, x]
                 details, _, _, _ = extract_strokes(component)
+                if not details and component.any():
+                    # A compact blot whose skeleton thins away still needs the nib: one short dab across it.
+                    ys, xs = np.nonzero(component)
+                    cells = np.c_[xs, ys].astype(float)
+                    center = cells.mean(0)
+                    axis = np.linalg.eigh(np.cov(cells.T))[1][:, -1] if len(cells) > 2 else np.array([1., 0.])
+                    reach = max(1., float(np.abs((cells - center) @ axis).max()))
+                    dab = resample(np.array([center - reach * axis, center + reach * axis]))
+                    details = [{'points': dab, 'radius': np.full(len(dab), 1.5), 'closed': False, 'micro': True,
+                                'length': float(calculate_lengths(dab)[-1])}]
                 if not details:
                     raise ValueError('Visible ink has no drawable contour; repair the outline')
                 strokes.extend(details)

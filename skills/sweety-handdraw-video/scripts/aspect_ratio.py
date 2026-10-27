@@ -1,7 +1,7 @@
-"""Video canvas aspect ratios: presets, custom sizes, and default 9:16 vertical."""
+"""Video canvas aspect ratios: presets, custom sizes, and default 2:3 vertical."""
 import re
 
-# Long side is 1920 where it fits; short side stays even. 9:16 is the product default.
+# Long side is 1920 where it fits; short side stays even. 2:3 is the product default (since 2.0).
 PRESETS = {
     '9:16': (1080, 1920),
     '3:4':  (1440, 1920),
@@ -10,7 +10,7 @@ PRESETS = {
     '4:3':  (1920, 1440),
     '3:2':  (1920, 1280),
 }
-DEFAULT_RATIO = '9:16'
+DEFAULT_RATIO = '2:3'
 MIN_SIDE, MAX_SIDE = 720, 2160
 MAX_PIXELS = int(1920 * 1920 * 1.05)
 

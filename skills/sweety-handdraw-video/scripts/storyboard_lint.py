@@ -68,7 +68,7 @@ def group_beats(beat_ids, group):
     return beat_ids[first:last + 1]
 
 
-STROKES_PER_SECOND = 3.5  # measured draw-v2 pace at the cap: contour strokes, pen lifts and marker color included
+STROKES_PER_SECOND = 5.  # measured draw-v3 pace at the cap (42 production pictures, 360 and 650 px wide alike): strokes, lifts and color
 MAX_DRAWING_SHARE = .7    # the pen is busy at most this share of the narration; the finished pictures hold the rest
 
 
@@ -235,8 +235,9 @@ def usage(root, manifest, board):
         placed.setdefault(identity, []).append(action)
     for identity, (shot, visual) in visuals.items():
         types = [action['type'] for action in placed.get(identity, [])]
-        need = {'illustration': 'illustration' in types, 'text_group': 'text' in types,
-                'diagram': 'marker' in types and len(types) >= 2}.get(visual.get('kind'), True)
+        # A counting number is a text label; a chart, or a pen line/arrow with something else, is a diagram.
+        need = {'illustration': 'illustration' in types, 'text_group': bool({'text', 'counter'} & set(types)),
+                'diagram': 'bar_chart' in types or (bool({'marker', 'line', 'arrow'} & set(types)) and len(types) >= 2)}.get(visual.get('kind'), True)
         if not need:
             errors.append(f'{shot.get("id")}/{identity}: planned {visual.get("kind")} "{visual.get("subject")}" is missing from job.json '
                           '(diagram = marker + another action); planned visuals cannot be skipped')

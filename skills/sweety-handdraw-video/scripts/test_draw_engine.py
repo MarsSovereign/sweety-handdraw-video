@@ -69,7 +69,7 @@ class DrawEngineTests(unittest.TestCase):
         source = self.directory / 'figure.png'
         parts = figure(source)
         metadata = stroke_assets.build_illustration('figure', source, 240, 300, parts=parts, seconds=8)
-        self.assertEqual(metadata['engine'], 'draw-v2')
+        self.assertEqual(metadata['engine'], 'draw-v3')
         self.assertEqual(set(metadata['drawability']), DRAWABILITY)
         self.assertTrue(metadata['drawability']['lineart_gate']['passed'])
         self.assertLessEqual(metadata['drawability']['minimum_seconds'], metadata['drawability']['required_seconds'])

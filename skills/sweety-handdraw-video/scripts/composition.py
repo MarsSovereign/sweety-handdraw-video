@@ -6,7 +6,7 @@ from PIL import Image, ImageColor
 
 LAYOUTS = ('hero_with_context', 'scene', 'comparison', 'sequence', 'modules', 'accumulating_board')
 MIN_CONTENT_EXTENT = {'picture_book': .22, 'focus_diagram': .32, 'dense_infographic': .50,
-                      'accumulating_board': .50, 'step_sequence': .28, 'narrative_comic': .35}
+                      'accumulating_board': .50, 'lecture_annotate': .30, 'step_sequence': .28, 'narrative_comic': .35}
 TINY_PICTURE_EXTENT = .08
 
 
@@ -187,6 +187,7 @@ def measure_pages(root, timeline, board, fixture=False):
             if event.get('caption') or (not is_picture and metadata.get('type') != 'handwritten_text'):
                 continue
             name = event['asset']
+            board = float(event.get('scale', 1.))  # assets of a zoomed page are built at its board resolution
             if name not in cached_masks:
                 path = Path(root) / 'work/assets' / f'{name}.png'
                 with Image.open(path) as image:
@@ -194,7 +195,7 @@ def measure_pages(root, timeline, board, fixture=False):
                 contrast = np.max(np.abs(rgba[:, :, :3].astype(np.int16) - paper), axis=2)
                 foreground = (rgba[:, :, 3] > 24) & (contrast > 24)
                 mask = Image.fromarray((foreground * 255).astype(np.uint8))
-                cached_masks[name] = mask.resize((max(1, round(mask.width * scale)), max(1, round(mask.height * scale))), Image.Resampling.NEAREST)
+                cached_masks[name] = mask.resize((max(1, round(mask.width * scale / board)), max(1, round(mask.height * scale / board))), Image.Resampling.NEAREST)
             placed = Image.new('L', content_mask.size)
             placed.paste(cached_masks[name], (round(event['x'] * scale), round(event['y'] * scale)))
             content_mask = ImageChops.lighter(content_mask, placed)

@@ -1,12 +1,20 @@
 # 声音与收尾硬约束
 
-## 配乐默认关闭
+## 写字有笔声，画画静音；配乐默认关闭
 
-生产混音默认只有完整旁白，代码不生成背景音乐。旧 music.wav 即使存在也不会使用。audio.music 省略或 false；只有用户本次明确要求并提供 user_instruction 与 source 时可加入。每个 audio.sound_effects 项必须有 source、start、gain、beat_id、reason，说明必要的剧情作用；不能用循环音效变相铺音乐。素材变动会使构建指纹失效。
+生产混音默认是完整旁白加一层程序合成的写字笔声（只在手写文字时发声，描线和上色静音——用户试听后认为画画时持续的沙沙声刺耳、累耳）；代码不自行添加背景音乐，旧 music.wav 即使存在也不会使用。所有声音都由本仓代码合成，不下载、不采样、不引用他人旋律。
+
+笔声（`scripts/foley.py`）在时间线生成后按每个非字幕事件的笔段逐毫秒合成，与笔尖同步：ink/sketch 是笔尖擦纸的沙沙声（带通噪声，笔速越快越亮越响；纸纹颗粒沿笔迹读取，颗粒快慢随笔速；落笔有极轻的触纸声），手写字同一笔尖、频带略低、颗粒更细，听起来是柔和的铅笔擦纸声，整层再经 5.2 kHz 低通去掉刺耳的高频嘶声，color/shade/brush 是更低更宽的马克笔涂抹声，之字形折返处随笔速减弱形成节奏；travel/pause 抬笔段静音。声像随笔尖 x 位置轻微偏左右；旁白说话时压低 4 dB（40 ms 压下、300 ms 回弹）。电平是绝对值，不按片子归一：参考笔画单声道约 -34 dBFS，软上限 -24 dBFS；实测天涯样片全片笔声约 -37 LUFS，比旁白低约 20 LU。音色按手部预设选择（马克笔、中性笔/钢笔、彩铅、毛笔）。`audio.foley` 省略或 true 即默认（`scope: "writing"`，只有写字发声）；`{"scope": "all"}` 让描线和上色也发声；false 或 `{"enabled":false}` 关闭；可设 `gain_db`（-18…6）、`duck_db`（0…12）、`tool`（auto/marker/pen/pencil/brush）、`seed`、`stereo`。结果写入 `work/audio/foley.wav` 与 `foley-report.json`，以 `kind:"foley"`（gain 0.25）层进入 `audio_policy.layers`。
+
+audio.music 省略或 false；只有用户本次明确要求并提供 user_instruction 与 source 时可加入。每个 audio.sound_effects 项必须有 source、start、gain、beat_id、reason，说明必要的剧情作用；不能用循环音效变相铺音乐。素材变动会使构建指纹失效。
 
 用户明确要求配乐时，构建自动准备音乐床（`scripts/music_bed.py`）：`source` 给原始音乐文件即可，默认 4 秒交叉续接循环、1.2 秒淡入、3 秒淡出，并用旁白做侧链随语音压低、句间回弹（`duck` 默认开启，可设 false）；特定台词段还要更轻时给 `dips:[[起秒,止秒],…]`（约 0.25 秒斜坡压到约 6%）。`crossfade_seconds`/`fade_in_seconds`/`fade_out_seconds` 可改，全部参数与源文件/音乐床哈希写入 `work/music-preparation.json`。`source` 已是成品音乐床时写 `prepared:true`，构建按现文件使用。换音乐、旁白或时长后必须重新构建并复核混音。
 
-混音报告记录实际输入轨。旁白先经 70 Hz 高通（去隆隆声和直流），再做两遍 loudnorm（I=-20、TP=-2、LRA=7）：第一遍测量，第二遍用测量值以线性增益整体调整，不做动态压缩，时长不变；报告记录测量值和实际模式（`linear`，目标无法线性达到时 ffmpeg 会退回 `dynamic`，须检查）。无附加音轨时处理后直接输出，禁止使用会丢失尾部缓冲的混音链。成片交付必须告知：默认未添加背景音乐；可自行合成，或在发布平台选择配乐。
+没有现成音乐时，`source` 可写 `builtin:calm|warm|curious|focused|tense`（仍需 user_instruction，不能写 prepared:true）：由 `scripts/music_synth.py` 在代码里作曲并合成——调内和弦进行、去谐波垫音、FM 电钢琴或拨弦琶音、正弦贝斯，部分情绪有极轻的鼓，合成混响，7.5 kHz 以上滤除；按旁白时长渲染成 -16 LUFS 的原始音乐，再走上面同一条准备链。同一情绪加同一 `seed`（默认 0）结果相同。未写 gain 时默认 0.25，说话时比旁白低约 22 dB。calm：66 BPM，D 大调慢琶音，无鼓；warm：74 BPM，F 大调 lo-fi 电钢琴和弦加轻鼓；curious：92 BPM，G 利底亚拨弦八分音加沙锤；focused：84 BPM，A 多利亚稳定拨弦脉冲加轻鼓；tense：70 BPM，D 和声小调低垫音加心跳式低鼓。每 8 小节换一次密度，和弦进行回到起点，整小节可无缝循环。试听：`python scripts/music_synth.py warm --seconds 20 --first-bar 8 --fade 1 --output warm.wav`。
+
+混音报告记录实际输入轨，每层带混音电平（`levels`：峰值 dBFS、LUFS）。旁白先经 70 Hz 高通（去隆隆声和直流），再做两遍 loudnorm（I=-20、TP=-2、LRA=7）：第一遍测量，第二遍用测量值以线性增益整体调整，不做动态压缩，时长不变；报告记录测量值和实际模式（`linear`，目标无法线性达到时 ffmpeg 会退回 `dynamic`，须检查）。无附加音轨时处理后直接输出，禁止使用会丢失尾部缓冲的混音链。成片交付必须告知：默认未添加背景音乐；可自行合成，或在发布平台选择配乐。
+
+有附加层时，`verify` 用 `audio_gate.measure_layered_mix` 验收：先证明成片等于 mix.wav，再证明 mix.wav 减去已知各层（同增益、同起点）后等于归一化旁白——残差不超过 -30 dB、相关不低于 0.999、增益误差不超过 0.5 dB。旁白本身照旧过完整门禁（嗡声、停顿深度、直流、削波）。混音不得削波或带直流；去掉配乐后的部分（旁白、笔声、音效）不得出现持续单频线；说话时所有附加层合计须比旁白低至少 6 dB。字幕同步在已证明完整的旁白上测，因为笔声和配乐会填满它要找的停顿。报告逐层给出峰值、LUFS 以及说话时与停顿时的电平。
 
 ## 完整发音和短收尾
 

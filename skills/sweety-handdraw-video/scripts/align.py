@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import unicodedata
 import numpy as np
 
@@ -26,10 +27,11 @@ SYNC_GAP_SECONDS = .2
 SYNC_PAUSE_SECONDS = .03
 TRANSCRIBE = r'''
 import json, sys, mlx_whisper
-result = mlx_whisper.transcribe(sys.argv[1], path_or_hf_repo=sys.argv[2], language='zh', word_timestamps=True)
+language = sys.argv[3] if len(sys.argv) > 3 else 'zh'
+result = mlx_whisper.transcribe(sys.argv[1], path_or_hf_repo=sys.argv[2], language=language, word_timestamps=True)
 try:
     from opencc import OpenCC
-    convert = OpenCC('t2s').convert
+    convert = OpenCC('t2s').convert if language == 'zh' else (lambda text: text)
 except ImportError:
     convert = lambda text: text
 words = [{'text': convert(word['word']).strip(), 'start': word['start'], 'end': word['end']}
@@ -39,7 +41,7 @@ print(json.dumps({'text': convert(result['text']), 'words': words}, ensure_ascii
 FORCE_ALIGN = r'''
 import json, sys
 from mlx_audio.stt.utils import load_model
-result = load_model(sys.argv[2]).generate(audio=sys.argv[1], text=sys.argv[3], language='Chinese')
+result = load_model(sys.argv[2]).generate(audio=sys.argv[1], text=sys.argv[3], language=sys.argv[4] if len(sys.argv) > 4 else 'Chinese')
 print(json.dumps({'words': [{'text': item.text, 'start': item.start_time, 'end': item.end_time} for item in result.items]}, ensure_ascii=False))
 '''
 
@@ -96,25 +98,58 @@ def numbers(text):
     return re.sub(r'-(?=\d)', '负', text)
 
 
-def cer(expected, actual):
-    expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
+def edit_rate(expected, actual):
+    """Levenshtein distance over any two sequences, divided by the expected length."""
     row = np.arange(len(actual) + 1)
-    for index, character in enumerate(expected, 1):
+    for index, item in enumerate(expected, 1):
         previous, row = row, np.empty_like(row)
         row[0] = index
         for column, other in enumerate(actual, 1):
-            row[column] = min(previous[column] + 1, row[column - 1] + 1, previous[column - 1] + (character != other))
+            row[column] = min(previous[column] + 1, row[column - 1] + 1, previous[column - 1] + (item != other))
     return float(row[-1] / max(1, len(expected)))
 
 
-def covers(expected, actual, max_cer=.15):
-    """ASR must cover the whole text: low CER and matched characters near both ends (numbers compared by value)."""
-    raw_actual = actual
-    expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
+def cer(expected, actual):
+    return edit_rate(spoken(numbers(expected)), spoken(numbers(actual)))
+
+
+def syllables(text):
+    """Toneless pinyin per Han character in context; digits, Latin letters and signs stay one token each."""
+    from pypinyin import lazy_pinyin
+    return lazy_pinyin(text, errors=lambda other: list(other))
+
+
+def anchored(expected, actual, error, max_cer):
     blocks = [block for block in SequenceMatcher(None, expected, actual, autojunk=False).get_matching_blocks() if block.size]
-    error = cer(expected, actual)
-    ok = bool(blocks) and error <= max_cer and blocks[0].a <= 2 and blocks[-1].a + blocks[-1].size >= len(expected) - 2
-    return {'cer': round(error, 3), 'status': 'pass' if ok else 'fail', 'asr_text': raw_actual, 'comparison_text': actual}
+    return bool(blocks) and error <= max_cer and blocks[0].a <= 2 and blocks[-1].a + blocks[-1].size >= len(expected) - 2
+
+
+def covers(expected, actual, max_cer=.15, homophones=True):
+    """ASR must cover the whole text: low CER and matched characters near both ends (numbers compared by value).
+
+    Whisper writes rare characters as common homophones (蓑笠 -> 梭利, 钓 -> 吊, 大雪 -> 大学), which fails short
+    classical lines that were read correctly. With homophones=True a failing character comparison is checked again on
+    toneless pinyin (when pypinyin is installed): homophones pass; skipped, babbled or misread numbers still fail.
+    Verbatim transcripts (voice references) pass homophones=False."""
+    raw_expected, raw_actual = expected, actual
+    expected, actual = spoken(numbers(expected)), spoken(numbers(actual))
+    error = edit_rate(expected, actual)
+    result = {'cer': round(error, 3), 'status': 'pass' if anchored(expected, actual, error, max_cer) else 'fail',
+              'asr_text': raw_actual, 'comparison_text': actual}
+    if result['status'] == 'fail' and homophones:
+        # Number normalization reads a homophone as a numeral (牵牛 heard as 千牛 -> 1000牛), so the pinyin check also
+        # compares the unnormalized text; a misread number differs in both forms.
+        try:
+            pairs = [(syllables(e), syllables(a)) for e, a in ((expected, actual), (spoken(raw_expected), spoken(raw_actual)))]
+        except ImportError:
+            result['pinyin'] = 'unavailable'
+        else:
+            scored = [(edit_rate(e, a), e, a) for e, a in pairs]
+            pinyin_error, expected_syllables, actual_syllables = min(scored, key=lambda item: item[0])
+            result['pinyin_cer'] = round(pinyin_error, 3)
+            if anchored(expected_syllables, actual_syllables, pinyin_error, max_cer):
+                result.update(status='pass', matched_by='pinyin')
+    return result
 
 
 def char_times(text, words):
@@ -150,7 +185,10 @@ def activity(samples, rate=SAMPLE_RATE):
     if len(samples) < width:
         return np.zeros(0, dtype=bool)
     count = 1 + (len(samples) - width) // hop
-    levels = 20 * np.log10(np.sqrt(np.mean(samples[np.arange(width)[None] + hop * np.arange(count)[:, None]] ** 2, axis=1)) + 1e-9)
+    # Frame energy from a running sum: the same values as a frame matrix without its memory (an 11-minute master is GBs).
+    energy = np.concatenate([[0.], np.cumsum(samples * samples)])
+    starts = hop * np.arange(count)
+    levels = 20 * np.log10(np.sqrt(np.maximum(energy[starts + width] - energy[starts], 0.) / width) + 1e-9)
     threshold = max(np.percentile(levels, 95) - 35, np.percentile(levels, 10) + 6)
     return levels > threshold
 
@@ -207,7 +245,14 @@ def pause_split(samples, weights, rate=SAMPLE_RATE):
     return ranges(chosen), 'pauses_near_text_proportion'
 
 
-def caption_texts(text, limit=MAX_CAPTION_CHARS):
+def caption_texts(text, limit=MAX_CAPTION_CHARS, split_long=False):
+    """Cue texts joining back to text. Default: clauses packed up to limit characters, a long clause stays whole.
+    split_long=True (needs character timestamps to time the pieces): limit is CJK characters per cue (Latin letters
+    count ~0.6, e.g. caption_assets.cue_char_limit), long clauses split at word-aware positions, no packing across
+    a sentence end."""
+    if split_long:
+        from caption_assets import cue_pieces
+        return cue_pieces(text, limit)
     clauses = re.findall('[^' + CAPTION_BREAKS + ']+[' + CAPTION_BREAKS + ']*|[' + CAPTION_BREAKS + ']+', text)
     pieces = []
     for clause in clauses:
@@ -227,11 +272,36 @@ def ranges_from_times(texts, times):
     return result
 
 
+def snap_to_onsets(found, ranges, tolerance=SYNC_TOLERANCE_SECONDS / 2):
+    """ASR character times can sit a second away from the voice. A piece that starts away from every speech onset
+    (by more than half the sync tolerance, leaving room for the encoded track) moves to the nearest onset inside it;
+    with no pause there the speech is fluent, so the previous piece runs on to it without a gap.
+    found: onset seconds on the same clock as ranges."""
+    found = np.asarray(found, float)
+    result = [list(span) for span in ranges]
+    for index in range(1, len(result)):
+        start, end = result[index]
+        if len(found) and np.min(np.abs(found - start)) <= tolerance:
+            continue
+        inside = found[(found > result[index - 1][0] + .25) & (found < end - .25)] if len(found) else found
+        if len(inside):
+            start = float(inside[np.argmin(np.abs(inside - start))])
+            result[index][0] = start
+        result[index - 1][1] = start
+    return [tuple(span) for span in result]
+
+
 def piece_ranges(samples, texts, words=None, rate=SAMPLE_RATE):
     """Ranges (seconds within samples) for consecutive text pieces, from timestamps or pauses."""
     if words:
         times, matched = char_times(''.join(texts), words)
-        return ranges_from_times(texts, times), f'timestamps (matched {matched:.0%})'
+        found = onsets(samples, rate, SYNC_PAUSE_SECONDS)
+        ranges = ranges_from_times(texts, times)
+        # Speech before the first recognized word (a lone syllable the recognizer dropped, such as an onomatopoeia
+        # "叮") belongs to the first piece; otherwise that piece would get no time at all.
+        if len(found) and found[0] < ranges[0][0] - SYNC_TOLERANCE_SECONDS / 2:
+            ranges[0] = (float(found[0]), ranges[0][1])
+        return snap_to_onsets(found, ranges), f'timestamps (matched {matched:.0%})'
     return pause_split(samples, [max(1, len(spoken(text))) for text in texts], rate)
 
 
@@ -244,10 +314,17 @@ def entry(beat_id, text, texts, ranges, method):
     return {'id': beat_id, 'text': text, 'start': round(start, 3), 'end': round(end, 3), 'caption_cues': cues, 'cue_method': method}
 
 
-def beat_entry(samples, beat_id, text, offset, words=None, rate=SAMPLE_RATE):
-    texts = caption_texts(text)
+def beat_entry(samples, beat_id, text, offset, words=None, rate=SAMPLE_RATE, limit=None):
+    texts = caption_texts(text, limit, split_long=bool(words)) if limit else caption_texts(text)
     ranges, method = piece_ranges(samples, texts, words, rate)
     return entry(beat_id, text, texts, [(offset + left, offset + right) for left, right in ranges], method)
+
+
+def read_wave(path):
+    """Mono float samples of a wav at SAMPLE_RATE (decoded by FFmpeg)."""
+    raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-ac', '1', '-ar', str(SAMPLE_RATE), '-f', 's16le', '-'],
+                         capture_output=True, check=True).stdout
+    return np.frombuffer(raw, '<i2').astype(np.float32) / 32768
 
 
 def caption_sync(samples, cues, rate=SAMPLE_RATE, tolerance=SYNC_TOLERANCE_SECONDS):
@@ -270,27 +347,61 @@ def caption_sync(samples, cues, rate=SAMPLE_RATE, tolerance=SYNC_TOLERANCE_SECON
             'max_offset_seconds': round(max(offsets, default=0.), 3), 'outside_tolerance': outside}
 
 
-def transcribe(path, python=None, model=None, text=None):
-    """Character timestamps from an installed forced aligner (with text) or local Whisper; None if missing."""
+LANGUAGE_NAMES = {'zh': 'Chinese', 'en': 'English', 'ja': 'Japanese', 'ko': 'Korean', 'fr': 'French', 'de': 'German', 'es': 'Spanish'}
+
+
+def transcribe(path, python=None, model=None, text=None, language='zh'):
+    """Character timestamps from an installed forced aligner (with text) or local Whisper; None if missing.
+    language: ISO code of the narration (job.json "language", default zh)."""
     from voice_backends import tools, run_python
     found = tools()
     python = python or found['mlx_python']
     if text and python and found['forced_aligner']:
-        return run_python(python, FORCE_ALIGN, path, found['forced_aligner'], text)
+        return run_python(python, FORCE_ALIGN, path, found['forced_aligner'], text, LANGUAGE_NAMES.get(language, language))
     model = model or found['asr_model']
     if not python or not model:
         return None
-    return run_python(python, TRANSCRIBE, path, model)
+    return run_python(python, TRANSCRIBE, path, model, language)
 
 
-def align_master(source, beats, words, output, script_sha256):
-    """Alignment for a whole user-provided master from ASR/aligner character times."""
+def spoken_syllables(text):
+    """Spoken syllables, the unit of the speech-rate gates: one per CJK character, vowel groups per Latin word
+    (an all-caps acronym is spelled letter by letter), one per digit. Counting "All In AI" as seven characters made
+    a normal line read as too fast."""
+    count = 0
+    for token in re.findall(r'[\u3400-\u9fff\uf900-\ufaff]|[A-Za-z]+|\d', text):
+        if len(token) == 1 and '\u3400' <= token <= '\ufaff' or token.isdigit():
+            count += 1
+        elif token.isupper() and len(token) <= 5:
+            count += len(token) + sum(letter == 'W' for letter in token)
+        else:
+            groups = re.findall(r'[aeiouy]+', token.lower())
+            count += max(1, len(groups) - (token.lower().endswith('e') and len(groups) > 1))
+    return count
+
+
+def align_master(source, beats, words, output, script_sha256, limit=None):
+    """Alignment for a whole user-provided master from ASR/aligner character times; limit: CJK characters per cue."""
     times, matched = char_times(''.join(beat['text'] for beat in beats), words)
-    entries, cursor = [], 0
+    try:
+        found = onsets(read_wave(source), SAMPLE_RATE, SYNC_PAUSE_SECONDS)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        found = None  # no readable audio (a placeholder in tests): keep the ASR times as they are
+    pieces, cursor = [], 0
     for beat in beats:
-        count, texts = len(spoken(beat['text'])), caption_texts(beat['text'])
-        entries.append(entry(beat['id'], beat['text'], texts, ranges_from_times(texts, times[cursor:cursor + count]), 'whole_master_timestamps'))
+        count = len(spoken(beat['text']))
+        texts = caption_texts(beat['text'], limit, split_long=True) if limit else caption_texts(beat['text'])
+        pieces.append((beat, texts, ranges_from_times(texts, times[cursor:cursor + count])))
         cursor += count
+    if found is not None:
+        # Snap across the whole master, so a sentence's first cue (and so the sentence itself) also starts on the voice.
+        flat = snap_to_onsets(found, [span for _, _, ranges in pieces for span in ranges])
+        cursor, snapped = 0, []
+        for beat, texts, ranges in pieces:
+            snapped.append((beat, texts, flat[cursor:cursor + len(ranges)]))
+            cursor += len(ranges)
+        pieces = snapped
+    entries = [entry(beat['id'], beat['text'], texts, ranges, 'whole_master_timestamps') for beat, texts, ranges in pieces]
     for previous, following in zip(entries, entries[1:]):
         if previous['end'] > following['start']:
             raise ValueError('Character timestamps overlap between beats: ' + following['id'])
@@ -310,9 +421,11 @@ if __name__ == '__main__':
     from narration_master import script_text
     settings = manifest['narration']
     source = root/settings['source']
-    words = json.loads(arguments.words.read_text()) if arguments.words else transcribe(source)
+    words = json.loads(arguments.words.read_text()) if arguments.words else transcribe(source, language=manifest.get('language', 'zh'))
     if not words:
         raise SystemExit('No local ASR/aligner installed; provide --words from an aligner or cloud TTS timestamps')
     beats = [beat for page in manifest['pages'] for beat in page['beats']]
-    result = align_master(source, beats, words['words'], root/settings['alignment'], hashlib.sha256(script_text(manifest).encode()).hexdigest())
+    from caption_assets import cue_char_limit
+    result = align_master(source, beats, words['words'], root/settings['alignment'], hashlib.sha256(script_text(manifest).encode()).hexdigest(),
+                          cue_char_limit(manifest))
     print(json.dumps({'beats': len(result['beats']), 'matched_characters': result['matched_characters']}, ensure_ascii=False))

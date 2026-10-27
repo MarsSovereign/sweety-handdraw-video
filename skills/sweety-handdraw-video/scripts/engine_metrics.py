@@ -171,11 +171,61 @@ def line_fidelity(directory, name, outline):
     return {'line_ssim_240': round(ssim(rendered, source), 3), 'line_edge_f1_240': round(float(2 * precision * recall / max(1e-9, precision + recall)), 3)}
 
 
+def organization(metadata):
+    """How planned the line pass looks: strokes that grow out of ink already on the page, long pen jumps,
+    and how many separate scraps of line are visible while the picture forms (fewer reads as planned)."""
+    strokes = [np.array(segment['points'], float) for segment in metadata['segments'] if segment['kind'] == 'ink']
+    if len(strokes) < 2:
+        return {}
+    diagonal = math.hypot(metadata['width'], metadata['height'])
+    reach = max(3., .012 * diagonal)
+    from scipy.spatial import cKDTree
+    attached, lifts = 0, []
+    for index in range(1, len(strokes)):
+        drawn = cKDTree(np.vstack(strokes[:index]))
+        attached += drawn.query(strokes[index][0])[0] <= reach or drawn.query(strokes[index][-1])[0] <= reach
+        lifts.append(np.linalg.norm(strokes[index][0] - strokes[index - 1][-1]))
+    lifts = np.array(lifts) / diagonal
+    shape = (metadata['height'], metadata['width'])
+    scraps = {}
+    for share in (.25, .5, .75):
+        mask = np.zeros(shape, bool)
+        for points in strokes[:max(1, round(share * len(strokes)))]:
+            cells = np.clip(np.rint(points).astype(int), 0, [shape[1] - 1, shape[0] - 1])
+            mask[cells[:, 1], cells[:, 0]] = True
+        scraps[f'{share:.0%}'] = int(ndimage.label(ndimage.binary_dilation(mask, iterations=max(2, round(reach / 2))))[1])
+    return {'attached_strokes': round(attached / (len(strokes) - 1), 3), 'lift_mean_of_diagonal': round(float(lifts.mean()), 3),
+            'long_jumps': int((lifts > .25).sum()), 'visible_scraps': scraps}
+
+
+def speckles(directory, name, metadata):
+    """Grain left in the line pass: tiny islands of ink and half-transparent ink pixels with no solid line
+    next to them, measured on the frame where every line is down and no marker has started."""
+    maps = np.load(Path(directory) / f'{name}.npz')
+    if 'ink_owner' not in maps.files:
+        return {}
+    import illustration_layers
+    layers = illustration_layers.load(directory, name)
+    ink = np.asarray(maps['ink'])
+    color = np.asarray(maps['color'])
+    line_end = float(np.max(ink[np.isfinite(ink)], initial=0.))
+    first_color = float(np.min(color[np.isfinite(color)], initial=1.))
+    progress = min(line_end + .002, max(first_color - .001, 0.)) if np.isfinite(first_color) else line_end + .002
+    visible = illustration_layers.compose(layers, np.float32(progress))[:, :, 3] / 255.
+    solid = visible > .5
+    labels, count = ndimage.label(solid, structure=np.ones((3, 3)))
+    sizes = np.bincount(labels.ravel())[1:]
+    partial = (visible > .08) & ~solid & ~ndimage.binary_dilation(solid, iterations=1)
+    return {'speck_islands': int((sizes <= 6).sum()), 'loose_partial_pixels_per_kpx': round(1000 * float(partial.sum()) / max(1, int((visible > .08).sum())), 1)}
+
+
 def measure(directory, name, seconds=None, outline=None, fps=30):
     metadata = json.loads((Path(directory) / f'{name}.json').read_text())
     seconds = float(seconds or metadata.get('seconds') or 1.)
     report = {'name': name, 'engine': metadata.get('engine', 'reveal-v1'), 'seconds': round(seconds, 2)}
     report.update(stroke_statistics(metadata, seconds))
+    report['organization'] = organization(metadata)
+    report['speckles'] = speckles(directory, name, metadata)
     report['tip'] = tip_motion(metadata, seconds, fps)
     report.update(anti_reveal(*load_frames(directory, name, metadata), seconds))
     if outline is not None and (Path(directory) / f'{name}-line.png').exists():

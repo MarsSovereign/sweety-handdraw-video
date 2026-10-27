@@ -6,20 +6,24 @@
 #   bash scripts/setup.sh --venv DIR use another venv (default: ~/.local/share/sweety-handdraw-video/venv)
 #   bash scripts/setup.sh --voxcpm   Apple Silicon only: also create an MLX venv and download
 #                                    mlx-community/VoxCPM2-8bit (about 3.2 GB); never done without this flag
+#   bash scripts/setup.sh --web-motion  also install Playwright and its headless Chromium (about 150 MB) for web
+#                                    motion layers (titles, charts, maps, morphs); without it those layers are refused
 set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/sweety-handdraw-video"
 VENV="$DATA_DIR/venv"
 CHECK=0
 VOXCPM=0
+WEB_MOTION=0
 PROBLEMS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --venv) VENV="$2"; shift ;;
     --voxcpm) VOXCPM=1 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
-    *) echo "Unknown option: $1"; sed -n '2,9p' "$0"; exit 2 ;;
+    --web-motion) WEB_MOTION=1 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    *) echo "Unknown option: $1"; sed -n '2,11p' "$0"; exit 2 ;;
   esac
   shift
 done
@@ -74,6 +78,18 @@ if [ -x "$VENV/bin/python" ] && [ $PROBLEMS = 0 ]; then
     || problem "Chinese font -> see the fonts.py error above"
 fi
 
+step "Web motion layers (optional)"
+if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" "$SKILL_DIR/scripts/web_motion.py" check 2>/dev/null | grep -q '"available": true'; then
+  echo "ok: Playwright + Chromium"
+elif [ $WEB_MOTION = 1 ] && [ $CHECK = 0 ] && [ -x "$VENV/bin/python" ]; then
+  "$VENV/bin/python" -m pip install -q 'playwright>=1.40'
+  "$VENV/bin/python" -m playwright install chromium
+  "$VENV/bin/python" "$SKILL_DIR/scripts/web_motion.py" check | grep -q '"available": true' && echo "ok: Playwright + Chromium" \
+    || problem "web motion -> see the Playwright error above"
+else
+  echo "not installed (only needed for overlays): bash scripts/setup.sh --web-motion"
+fi
+
 if [ $VOXCPM = 1 ]; then
   step "VoxCPM2 MLX (explicitly requested)"
   if [ "$OS" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
@@ -81,7 +97,7 @@ if [ $VOXCPM = 1 ]; then
   elif [ $CHECK = 0 ]; then
     VOX_VENV="$DATA_DIR/voxcpm-venv"; MODEL="$DATA_DIR/models/VoxCPM2-8bit"
     [ -x "$VOX_VENV/bin/python" ] || "$PYTHON" -m venv "$VOX_VENV"
-    "$VOX_VENV/bin/python" -m pip install -q mlx-audio soundfile huggingface_hub
+    "$VOX_VENV/bin/python" -m pip install -q mlx-audio soundfile huggingface_hub pypinyin
     "$VOX_VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/VoxCPM2-8bit', local_dir='$MODEL')"
     echo "ok: job.json \"voxcpm\": {\"model_path\": \"$MODEL\"}; run: $VOX_VENV/bin/python scripts/voxcpm_voice.py JOB"
   fi

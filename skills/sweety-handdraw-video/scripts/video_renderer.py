@@ -4,6 +4,7 @@ import bisect
 import hashlib
 import json
 import math
+import shutil
 import subprocess
 import wave
 import numpy as np
@@ -14,6 +15,9 @@ import illustration_layers
 
 
 ENTER_SECONDS, EXIT_SECONDS = .45, .5
+BLUR_PX = 18.
+TRANSITION_EFFECTS = ('wipe', 'zoom', 'erase', 'page_turn', 'slide_over', 'marker_wipe', 'ink_bleed', 'iris', 'card_flip', 'zoom_through', 'whip', 'push',
+                      'paper_tear', 'brush_reveal', 'cube', 'shards', 'tiles', 'flash')  # camera travel per frame (screen px) above which a frame is exposed three times and blended
 STAY_SECONDS = 1.  # shorter pen-up gaps keep the hand in frame
 MAX_TILT = 7  # degrees of wrist turn
 SHADOW_OPACITY = .16
@@ -64,6 +68,17 @@ def bezier(origin,control,destination,fraction):
     return (1-fraction)**2*origin+2*(1-fraction)*fraction*control+fraction**2*destination
 
 
+class LazyAssets(dict):
+    """Asset images and time maps load on first use: a render chunk touches only the pages it shows."""
+    def __init__(self, loader):
+        super().__init__()
+        self.loader = loader
+
+    def __missing__(self, name):
+        value = self[name] = self.loader(name)
+        return value
+
+
 class Renderer:
     def __init__(self, job_directory):
         self.root=Path(job_directory).resolve()
@@ -75,23 +90,41 @@ class Renderer:
         self.fps=self.timeline['canvas']['fps']
         self.paper=ImageColor.getrgb(self.timeline['paper'])+(255,)
         self.starts=[page['start'] for page in self.timeline['pages']]
-        self.artwork={name:Image.open(self.work/'assets'/f'{name}.png').convert('RGBA') for name in self.timeline['assets']}
-        self.pixels={name:np.array(image) for name,image in self.artwork.items()}
-        self.maps={name:np.load(self.work/'assets'/f'{name}.npz') for name in self.timeline['assets']}
-        self.layers={name:illustration_layers.load(self.work/'assets',name) for name in self.timeline['assets'] if (self.work/'assets'/f'{name}-line.png').exists()}
+        assets=self.work/'assets'
+        self.artwork=LazyAssets(lambda name:Image.open(assets/f'{name}.png').convert('RGBA'))
+        self.pixels=LazyAssets(lambda name:np.array(self.artwork[name]))
+        self.maps=LazyAssets(lambda name:np.load(assets/f'{name}.npz'))
+        self.layered={name for name in self.timeline['assets'] if (assets/f'{name}-line.png').exists()}
+        self.layers=LazyAssets(lambda name:illustration_layers.load(assets,name))
         self.cover=Image.open(self.output/'cover.png').convert('RGBA')
+        self.backgrounds={}
+        for page in self.timeline['pages']:
+            if page.get('background'):
+                size=self.board_size(page['index'])
+                self.backgrounds[page['index']]=Image.open(page['background']).convert('RGBA').resize(size,Image.Resampling.LANCZOS)
         hand=Image.open(self.timeline['hand']['source']).convert('RGBA')
         scale=self.timeline['hand']['scale']
         self.hand=hand.resize((round(hand.width*scale),round(hand.height*scale)),Image.Resampling.LANCZOS)
         self.nib=np.array(self.timeline['hand']['nib'])*scale
         self.watermark = Image.open(self.timeline['watermark']['source']).convert('RGBA') if self.timeline.get('watermark') else None
 
+    def scale(self,index):
+        """Board resolution of a page relative to the screen: >1 when its camera zooms in, so a close-up stays sharp."""
+        return float(self.timeline['pages'][index].get('scale',1.))
+
+    def board_size(self,index):
+        scale=self.scale(index)
+        return (round(self.width*scale),round(self.height*scale))
+
     def layer(self,event,time):
         name=event['asset']
         if event.get('caption') or time>=event['end']:
             return self.artwork[name]
         progress=float(np.clip((time-event['start'])/(event['end']-event['start']),0,1))
-        if name in self.layers:
+        metadata=self.timeline['assets'][name]
+        if metadata.get('type')=='counter':
+            return self.counter_frame(metadata,progress)
+        if name in self.layered:
             return Image.fromarray(illustration_layers.compose(self.layers[name],progress))
         maps=self.maps[name]
         pixels=self.pixels[name].copy()
@@ -104,13 +137,30 @@ class Renderer:
         pixels[:,:,3]=np.rint(pixels[:,:,3]*fraction).astype(np.uint8)
         return Image.fromarray(pixels)
 
+    def counter_frame(self,metadata,progress):
+        """Typeset value of a counting number at this point of its count (eased, so it settles on the final value)."""
+        spec=metadata['counter']
+        fonts=self.__dict__.setdefault('counter_fonts',{})
+        key=(spec['font']['path'],spec['font']['index'],spec['size'])
+        if key not in fonts:
+            from PIL import ImageFont
+            fonts[key]=ImageFont.truetype(spec['font']['path'],spec['size'],index=spec['font']['index'])
+        value=spec['from']+(spec['to']-spec['from'])*float(distance_fraction(progress,'minjerk'))
+        text=f"{spec['prefix']}{value:,.{spec['decimals']}f}{spec['suffix']}"
+        image=Image.new('RGBA',(metadata['width'],metadata['height']))
+        from PIL import ImageDraw
+        ImageDraw.Draw(image).text(tuple(spec['origin']),text,font=fonts[key],fill=spec['color'])
+        return image
+
     def event_state(self,event,progress):
         cache=self.__dict__.setdefault('segment_starts',{})
         metadata=self.timeline['assets'][event['asset']]
         if event['asset'] not in cache:
             cache[event['asset']]=[segment['start'] for segment in metadata['segments']]
         point,lift=asset_tip(metadata,progress,cache[event['asset']])
-        return np.array([event['x'],event['y']])+point,lift
+        # Screen units: an asset of a zoomed page is drawn at its board resolution (event scale).
+        scale=float(event.get('scale',1.))
+        return np.array([event['x'],event['y']])+point/scale,lift/scale
 
     def event_tip(self,event,progress):
         return self.event_state(event,progress)[0]
@@ -128,7 +178,8 @@ class Renderer:
     def pen_events(self):
         """Every main drawing event of the film in time order with its page: one physical pen throughout."""
         if 'pen_event_list' not in self.__dict__:
-            events=[(event,index) for index,page in enumerate(self.timeline['pages']) for event in page.get('events',[]) if not event['caption']]
+            events=[(event,index) for index,page in enumerate(self.timeline['pages']) for event in page.get('events',[])
+                    if not event['caption'] and event.get('pen',True)]
             self.pen_event_list=sorted(events,key=lambda item:item[0]['start'])
             self.pen_event_starts=[event['start'] for event,_ in self.pen_event_list]
         return self.pen_event_list
@@ -175,9 +226,16 @@ class Renderer:
             cache[key]=None if state is None else (state[0],state[2])
         return cache[key]
 
-    def hand_pose(self,angle):
-        """Hand, soft shadow, nib and cut-edge points rotated about the nib; cached per whole degree."""
+    def hand_pose(self,angle,scale=1.):
+        """Hand, soft shadow, nib and cut-edge points rotated about the nib; cached per whole degree and board scale."""
         cache=self.__dict__.setdefault('hand_poses',{})
+        if scale!=1.:
+            if (angle,scale) not in cache:
+                hand,shadow,nib,pad,cut=self.hand_pose(angle)
+                size=lambda image:(max(1,round(image.width*scale)),max(1,round(image.height*scale)))
+                cache[(angle,scale)]=(hand.resize(size(hand),Image.Resampling.LANCZOS),shadow.resize(size(shadow),Image.Resampling.BILINEAR),
+                                      nib*scale,round(pad*scale),cut*scale)
+            return cache[(angle,scale)]
         if angle not in cache:
             hand=self.hand.rotate(angle,Image.Resampling.BICUBIC,expand=True) if angle else self.hand
             radians=math.radians(angle)
@@ -236,17 +294,18 @@ class Renderer:
                 return candidate
         return 0
 
-    def draw_hand(self,frame,time,page=None):
-        """Draw the pen if it is in frame (and, when a page is given, only if it belongs to that page)."""
+    def draw_hand(self,frame,time,page=None,scale=1.):
+        """Draw the pen if it is in frame (and, when a page is given, only if it belongs to that page).
+        On a board drawn at a higher resolution (scale) the hand is drawn at that resolution too."""
         state=self.pen_state(time)
         if state is None or (page is not None and state[2]!=page):
             return
         point,lift,_=state
-        hand,shadow,nib,pad,_=self.hand_pose(self.hand_angle(time,point))
-        corner=np.rint(point-nib).astype(int)
+        hand,shadow,nib,pad,_=self.hand_pose(self.hand_angle(time,point),scale)
+        corner=np.rint(point*scale-nib).astype(int)
         # The shadow stays on the paper while the pen lifts, so it separates slightly from the hand; a bare pen's meets its nib.
         resting=0. if self.timeline.get('hand',{}).get('kind')=='pen' else self.height*np.array([.008,.012])
-        offset=np.rint(resting+lift*np.array([.5,1.4])).astype(int)
+        offset=np.rint((resting+lift*np.array([.5,1.4]))*scale).astype(int)
         frame.alpha_composite(shadow,tuple(corner-pad+offset))
         frame.alpha_composite(hand,tuple(corner))
 
@@ -256,19 +315,134 @@ class Renderer:
                 frame.alpha_composite(self.layer(event,time),(event['x'],event['y']))
 
     def page_frame(self,index,time,include_hand=True,include_captions=True):
+        """The page board at its own resolution (screen size times page scale). Finished elements below the first one
+        still drawing are composited once and reused while they do not change."""
         page=self.timeline['pages'][index]
-        frame=Image.new('RGBA',(self.width,self.height),self.paper)
-        events=sorted(page['events'],key=lambda event:(event['z'],event['start']))
-        for event in events:
-            if event['caption']:
-                continue
-            if event['start']<=time<event['hide']:
-                frame.alpha_composite(self.layer(event,time),(event['x'],event['y']))
+        scale=self.scale(index)
+        events=self.__dict__.setdefault('sorted_events',{})
+        if index not in events:
+            events[index]=sorted((event for event in page['events'] if not event['caption']),key=lambda event:(event['z'],event['start']))
+        visible=[event for event in events[index] if event['start']<=time<event['hide']]
+        settled=0
+        while settled<len(visible) and time>=visible[settled]['end'] and not self.animated(visible[settled],time):
+            settled+=1
+        key=tuple(id(event) for event in visible[:settled])
+        cache=self.__dict__.setdefault('settled_cache',{})  # one base per page: a transition shows two pages at once
+        if cache.get(index,(None,))[0]!=key:
+            base=Image.new('RGBA',self.board_size(index),self.paper)
+            background=getattr(self,'backgrounds',{}).get(index)  # renderers built by tests may skip __init__
+            if background is not None:
+                base.alpha_composite(background,(0,0))
+            for event in visible[:settled]:
+                base.alpha_composite(self.layer(event,time),self.anchor(event,scale))
+            if len(cache)>4:
+                cache.clear()
+            cache[index]=(key,base)
+        frame=cache[index][1].copy()
+        for event in visible[settled:]:
+            self.place(frame,event,time,scale)
+        self.draw_overlays(frame,index,time,'board',scale)
         if include_hand:
-            self.draw_hand(frame,time,index)
+            self.draw_hand(frame,time,index,scale)
         if include_captions:
+            if scale!=1.:
+                frame=self.apply_camera(frame,np.array([self.width/2,self.height/2]),1.,scale)
+            self.draw_overlays(frame,index,time,'screen')
             self.draw_captions(frame,index,time)
         return frame
+
+    def overlay_frame(self,overlay,time):
+        """Current frame of a web motion layer (held on its last frame), with its exit applied; None when hidden."""
+        if time<overlay['start']:
+            return None
+        exit_spec=overlay.get('exit')
+        if exit_spec and time>=exit_spec['end']:
+            return None
+        index=min(overlay['count']-1,int((time-overlay['start'])*self.fps+1e-6))
+        cache=self.__dict__.setdefault('overlay_frames',{})
+        key=(overlay['frames'],index)
+        if key not in cache:
+            if len(cache)>240:
+                cache.clear()
+            cache[key]=Image.open(Path(overlay['frames'])/f'{index:05d}.png').convert('RGBA')
+        image=cache[key]
+        if exit_spec and time>=exit_spec['start']:
+            import motion
+            fraction=(time-exit_spec['start'])/max(1e-6,exit_spec['end']-exit_spec['start'])
+            total=motion.identity()
+            total['opacity']=1-fraction
+            if exit_spec['style']=='shrink':
+                total['sx']=total['sy']=1-.6*fraction
+            image,_=motion.apply(image,total)
+            return image,True
+        return image,False
+
+    def draw_overlays(self,frame,index,time,space,scale=1.):
+        for overlay in sorted(self.timeline['pages'][index].get('overlays',()),key=lambda item:item['z']):
+            if overlay['space']!=space:
+                continue
+            shown=self.overlay_frame(overlay,time)
+            if shown is None:
+                continue
+            image,padded=shown
+            x,y=round(overlay['x']*scale),round(overlay['y']*scale)
+            if padded:  # motion.apply pads the layer; centre it on the overlay box
+                x-=(image.width-round(overlay['width']*overlay['scale']))//2
+                y-=(image.height-round(overlay['height']*overlay['scale']))//2
+            frame.alpha_composite(image,(x,y))
+
+    @staticmethod
+    def anchor(event,scale):
+        return (round(event['x']*scale),round(event['y']*scale))
+
+    def animated(self,event,time):
+        """A finished element playing a motion (or looping an idle one) cannot come from the settled cache."""
+        import motion
+        for effect in event.get('motions',()):
+            if effect['type'] in motion.IDLE and time>=effect['start']:
+                return True
+            if effect['start']<=time<effect['end'] or (effect['type'] in motion.EXIT and time>=effect['start']):
+                return True
+        return any(effect['start']<=time<effect['end'] for effect in event.get('emphasis',()))
+
+    def rig(self,event,part):
+        cache=self.__dict__.setdefault('rigs',{})
+        key=(event['asset'],part)
+        if key not in cache:
+            import motion
+            cache[key]=motion.part_rig(self.artwork[event['asset']],np.asarray(self.maps[event['asset']]['owners']),part)
+        return cache[key]
+
+    def boil(self,event,variant):
+        cache=self.__dict__.setdefault('boils',{})
+        if event['asset'] not in cache:
+            import motion
+            if len(cache)>24:
+                cache.clear()
+            cache[event['asset']]=motion.boil_variants(self.artwork[event['asset']],1.1*float(event.get('scale',1.)))
+        return cache[event['asset']][variant]
+
+    def place(self,frame,event,time,scale):
+        layer=self.layer(event,time)
+        motions=event.get('motions') or [dict(effect,type=effect['type']) for effect in event.get('emphasis',())]
+        if motions and time>=event['end']:
+            import motion
+            for effect in motions:
+                if effect['type'] in motion.PUPPET:
+                    pose=motion.puppet_state(effect,time)
+                    if pose:
+                        layer=motion.puppet_frame(self.rig(event,effect['part']),*pose,float(event.get('scale',1.)))
+            states=[state for state in (motion.state(effect,time) for effect in motions if effect['type'] not in motion.PUPPET) if state]
+            if states:
+                total=motion.combine(states)
+                if 'boil' in total:
+                    layer=self.boil(event,total.pop('boil'))
+                if not motion.is_identity(total):
+                    layer,offset=motion.apply(layer,total,float(event.get('scale',1.)))
+                    x,y=self.anchor(event,scale)
+                    frame.alpha_composite(layer,(x+offset[0],y+offset[1]))
+                    return
+        frame.alpha_composite(layer,self.anchor(event,scale))
 
     def camera_keys(self,index):
         cache=self.__dict__.setdefault('camera_cache',{})
@@ -276,11 +450,15 @@ class Renderer:
             page=self.timeline['pages'][index]
             beats={beat['id']:beat['start']-page['start'] for beat in page['beats']}
             keys=[]
+            import motion
             for key in page.get('camera') or []:
+                key=motion.camera_key(key)
                 at=key.get('at',0)
                 keys.append({'at':beats[at[5:]] if isinstance(at,str) else float(at),'zoom':float(key.get('zoom',1)),
                              'center':np.array(key.get('center',[self.width/2,self.height/2]),dtype=float),
-                             'seconds':float(key.get('seconds',.8)),'ease':key.get('ease','inout'),'follow':bool(key.get('follow'))})
+                             'seconds':float(key.get('seconds',.8)),'ease':key.get('ease','inout'),'follow':bool(key.get('follow')),
+                             'rotate':float(key.get('rotate',0)),'shake':float(key.get('shake',0)),
+                             'impact':float(key.get('impact',0)),'hop':float(key.get('hop',0))})
             cache[index]=sorted(keys,key=lambda key:key['at'])
         return cache[index]
 
@@ -290,11 +468,15 @@ class Renderer:
         half=np.array([self.width,self.height])/(2*zoom)
         return np.clip(center,half,np.array([self.width,self.height])-half)
 
-    def camera(self,index,time):
-        """Camera centre and zoom; a key at 0 s frames the page from its start, later keys glide in."""
+    def camera_state(self,index,time):
+        """(centre, zoom, rotation degrees) of the page camera: a key at 0 s frames the page from its start, later keys
+        glide in with their easing (any motion.ease name; inout = min-jerk). Zoom moves in log space (every doubling
+        takes the same time); a hop dips the zoom mid-move; an impact shakes the frame on arrival."""
+        import motion
         page=self.timeline['pages'][index]
         local=time-page['start']
-        center,zoom=np.array([self.width/2,self.height/2]),1.
+        center,zoom,rotate,shake=np.array([self.width/2,self.height/2]),1.,0.,float(page.get('handheld',0.))
+        jolt=np.zeros(3)
         for key in self.camera_keys(index):
             if local<key['at']:
                 break
@@ -304,21 +486,69 @@ class Renderer:
                       if tip is not None and tip[1]==index and 0<=tip[0][1]<=self.height]
                 target=target+.5*(np.mean(tips,axis=0)-target) if tips else target
             fraction=1. if key['seconds']<=0 or key['at']<=0 else float(np.clip((local-key['at'])/key['seconds'],0,1))
-            weight=fraction if key['ease']=='linear' else float(distance_fraction(fraction,'minjerk'))
-            center,zoom=center+weight*(target-center),zoom+weight*(key['zoom']-zoom)
-        return self.clamp_view(center,zoom),zoom
+            weight=motion.ease(key['ease'],fraction)
+            moved=zoom*(key['zoom']/zoom)**weight
+            if key['hop'] and 0<fraction<1:
+                moved=max(1.,moved/(1+key['hop']*4*fraction*(1-fraction)))
+            center,zoom,rotate=center+weight*(target-center),moved,rotate+weight*(key['rotate']-rotate)
+            shake=key['shake'] or shake
+            if key['impact']:
+                jolt=np.array(motion.impact_shake(key['impact'],local-key['at']-key['seconds']))
+        if shake:
+            # Hand-held drift: two incommensurate slow sines per axis, a few pixels, never a jitter.
+            center=center+shake*np.array([math.sin(1.3*time)+.5*math.sin(3.7*time+1),math.sin(1.1*time+2)+.5*math.sin(2.9*time)])/1.5
+        if jolt.any():
+            # A shake needs room to move: zoom in just enough that the frame never shows past the board.
+            zoom=max(zoom,1+2.2*float(np.abs(jolt[:2]).max())/min(self.width,self.height))
+            center=self.clamp_view(center,zoom)+jolt[:2]/zoom
+        return self.clamp_view(center,zoom),zoom,rotate+jolt[2]
 
-    def apply_camera(self,frame,center,zoom):
-        if abs(zoom-1)<1e-4:
+    def camera(self,index,time):
+        """Camera centre and zoom (see camera_state for rotation)."""
+        center,zoom,_=self.camera_state(index,time)
+        return center,zoom
+
+    def apply_camera(self,frame,center,zoom,scale=1.,rotate=0.):
+        """Screen view of a board: center in screen units, the board drawn at scale x screen resolution, so zooming in
+        up to the page scale is a sharp crop instead of an enlargement. A rotated camera samples the board through
+        one affine map (paper colour outside the board)."""
+        if abs(rotate)>1e-3:
+            board=frame.convert('RGB')
+            if scale/zoom>1.6:  # downsample first so the affine map does not alias
+                factor=int(scale/zoom)
+                board=board.reduce(factor)
+                scale/=factor
+            angle=math.radians(rotate)
+            cos,sin=math.cos(angle),math.sin(angle)
+            k=scale/zoom
+            cx,cy=self.width/2,self.height/2
+            a,b,d,e=k*cos,k*sin,-k*sin,k*cos
+            c=scale*center[0]-a*cx-b*cy
+            f=scale*center[1]-d*cx-e*cy
+            return board.transform((self.width,self.height),Image.Transform.AFFINE,(a,b,c,d,e,f),Image.Resampling.BICUBIC,
+                                   fillcolor=self.paper[:3]).convert('RGBA')
+        if abs(zoom-1)<1e-4 and scale==1.:
             return frame
         size=np.array([self.width,self.height])
-        box=tuple(np.clip(np.r_[center-size/(2*zoom),center+size/(2*zoom)],0,np.r_[size,size]))
-        return frame.convert('RGB').resize((self.width,self.height),Image.Resampling.BICUBIC,box=box).convert('RGBA')
+        box=tuple(np.clip(np.r_[center-size/(2*zoom),center+size/(2*zoom)],0,np.r_[size,size])*scale)
+        return frame.convert('RGB').resize((self.width,self.height),Image.Resampling.BICUBIC if zoom>scale else Image.Resampling.LANCZOS,
+                                           box=box,reducing_gap=None if zoom>scale else 2.).convert('RGBA')
 
     def view(self,index,time,include_captions=True):
-        if not self.timeline['pages'][index].get('camera') and include_captions and not self.foreign_hand(index,time):
+        if not self.timeline['pages'][index].get('camera') and self.scale(index)==1. and include_captions and not self.foreign_hand(index,time):
             return self.page_frame(index,time)
-        frame=self.apply_camera(self.page_frame(index,time,include_captions=False),*self.camera(index,time))
+        board=self.page_frame(index,time,include_captions=False)
+        center,zoom,rotate=self.camera_state(index,time)
+        # Motion blur on fast camera moves: average three exposures across the frame interval.
+        step=1/(3*self.fps)
+        before,after=self.camera_state(index,time-step),self.camera_state(index,time+step)
+        travel=(np.linalg.norm(after[0]-before[0])*zoom+abs(after[1]-before[1])*self.height+abs(after[2]-before[2])*self.height/60)*1.5
+        if travel>BLUR_PX:
+            shots=[self.apply_camera(board,*state[:2],self.scale(index),state[2]).convert('RGB') for state in (before,(center,zoom,rotate),after)]
+            frame=Image.fromarray(np.mean([np.asarray(shot,np.float32) for shot in shots],axis=0).round().astype(np.uint8)).convert('RGBA')
+        else:
+            frame=self.apply_camera(board,center,zoom,self.scale(index),rotate)
+        self.draw_overlays(frame,index,time,'screen')
         if include_captions:
             if self.foreign_hand(index,time):
                 self.draw_hand(frame,time)
@@ -340,17 +570,22 @@ class Renderer:
             return {'type':'legacy','start':boundary-.24,'end':boundary}
         if spec['type']=='cut':
             return None
-        seconds=float(spec.get('seconds',.6))
+        seconds=float(spec.get('seconds',{'erase':1.2,'page_turn':1.1,'marker_wipe':1.,'ink_bleed':1.,'iris':.9,'card_flip':.9,'zoom_through':1.,
+                                           'slide_over':.8,'whip':.45,'paper_tear':1.2,'brush_reveal':1.1,'cube':.9,'shards':1.1,'tiles':1.,
+                                           'flash':.4}.get(spec['type'],.6)))
         drawn=[event['start'] for event in pages[index]['events'] if not event['caption']]
         # No ink is laid while the board moves; a leaving or arriving hand rides along with its page.
         room_in=max(0.,min(drawn)-boundary) if drawn else seconds
         room_out=max(0.,boundary-pages[index-1]['last_drawing_end'])
-        incoming=min(seconds/2,room_in)
+        # An eraser clears the old page before the new one starts: most of its time comes from the old page's hold.
+        incoming=min(seconds*(.2 if spec['type']=='erase' else .5),room_in)
         outgoing=min(seconds-incoming,room_out)
         incoming=min(seconds-outgoing,room_in)
         if outgoing+incoming<2/self.fps:
             return None
-        return {'type':spec['type'],'start':boundary-outgoing,'end':boundary+incoming}
+        window={'type':spec['type'],'start':boundary-outgoing,'end':boundary+incoming,'direction':spec.get('direction','left')}
+        window.update({key:spec[key] for key in ('target','color','angle','style') if key in spec})
+        return window
 
     def pan(self,index,window,time,moving):
         """Glide across one continuous board: the next page waits to the right of the current one."""
@@ -360,16 +595,21 @@ class Renderer:
         center=start_center+moving*(end_center+[offset,0]-start_center)
         zoom=(start_zoom+moving*(end_zoom-start_zoom))*(1-.14*math.sin(math.pi*moving))
         board=Image.new('RGB',(offset+self.width,self.height),self.paper[:3])
-        board.paste(self.page_frame(index-1,time,include_captions=False).convert('RGB'),(0,0))
-        board.paste(self.page_frame(index,time,include_captions=False).convert('RGB'),(offset,0))
+        board.paste(self.screen_board(index-1,time).convert('RGB'),(0,0))
+        board.paste(self.screen_board(index,time).convert('RGB'),(offset,0))
         left,top=center-np.array([self.width,self.height])/(2*zoom)
         return board.transform((self.width,self.height),Image.Transform.AFFINE,(1/zoom,0,left,0,1/zoom,top),
                                Image.Resampling.BILINEAR,fillcolor=self.paper[:3]).convert('RGBA')
 
+    def screen_board(self,index,time,include_hand=True):
+        """Whole page at screen resolution, without the camera and captions."""
+        frame=self.page_frame(index,time,include_hand,include_captions=False)
+        return frame if self.scale(index)==1. else self.apply_camera(frame,np.array([self.width/2,self.height/2]),1.,self.scale(index))
+
     def blend(self,index,window,time):
         fraction=(time-window['start'])/(window['end']-window['start'])
         if window['type']=='legacy':
-            frame=self.page_frame(index-1,time)
+            frame=self.page_frame(index-1,time) if self.scale(index-1)==1. else self.view(index-1,time)
             canvas=Image.new('RGBA',(self.width,self.height),self.paper)
             canvas.alpha_composite(frame,(-round(self.width*ease(fraction)),0))
             self.draw_hand(canvas,time,index)
@@ -377,6 +617,10 @@ class Renderer:
         moving=float(distance_fraction(fraction,'minjerk'))
         if window['type']=='pan':
             frame=self.pan(index,window,time,moving)
+        elif window['type'] in TRANSITION_EFFECTS:
+            import transitions
+            old,new=self.view(index-1,time,False),self.view(index,time,False)
+            frame=getattr(transitions,window['type'])(self,old,new,fraction,window)
         else:
             old,new=self.view(index-1,time,False),self.view(index,time,False)
             if window['type']=='fade':
@@ -469,22 +713,78 @@ def aigc_arguments(produce_id):
     return ['-metadata','AIGC='+json.dumps(label),'-movflags','+faststart+use_metadata_tags']
 
 
-def encode(renderer,path,start=0.,duration=None):
+def x264_arguments():
+    return ['-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p']
+
+
+def render_workers():
+    """Parallel render processes: HANDDRAW_RENDER_WORKERS, else all but two cores (at most 8)."""
+    import os
+    configured=os.environ.get('HANDDRAW_RENDER_WORKERS')
+    if configured:
+        return max(1,int(configured))
+    return max(1,min(8,(os.cpu_count() or 2)-2))
+
+
+def render_chunk(job_directory,path,start,first,count):
+    """One worker: frames [first, first+count) of the interval beginning at start, video only."""
+    renderer=Renderer(job_directory)
+    command=['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24','-s',f'{renderer.width}x{renderer.height}','-r',str(renderer.fps),
+             '-i','-',*x264_arguments(),'-video_track_timescale',str(renderer.fps),str(path)]
+    process=subprocess.Popen(command,stdin=subprocess.PIPE)
+    for index in range(first,first+count):
+        process.stdin.write(renderer.frame(start+index/renderer.fps).tobytes())
+        if (index-first)%(15*renderer.fps)==0:
+            print('RENDER',round(start+index/renderer.fps,2),flush=True)
+    process.stdin.close()
+    if process.wait()!=0:
+        raise RuntimeError('ffmpeg failed to encode a render chunk')
+    return str(path)
+
+
+def encode(renderer,path,start=0.,duration=None,workers=None):
     duration=renderer.timeline['duration']-start if duration is None else duration
     if start < 0 or duration <= 0 or start+duration > renderer.timeline['duration']+.001:
         raise ValueError('Preview interval must stay within the narration timeline')
     temporary_path=path.with_name(path.stem+'.rendering'+path.suffix)
-    command=['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24','-s',f'{renderer.width}x{renderer.height}','-r',str(renderer.fps),'-i','-','-ss',str(start),'-i',str(renderer.work/'mix.wav'),'-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-t',str(duration),'-map_metadata','-1',*aigc_arguments(hashlib.sha256((renderer.root/'job.json').read_bytes()).hexdigest()[:16]),str(temporary_path)]
-    process=subprocess.Popen(command,stdin=subprocess.PIPE)
-    for index in range(math.ceil(duration*renderer.fps)):
-        process.stdin.write(renderer.frame(start+index/renderer.fps).tobytes())
-        if index%(15*renderer.fps)==0:
-            print('RENDER',index/renderer.fps,'/',round(duration,2),flush=True)
-    process.stdin.close()
-    if process.wait()!=0:
-        raise RuntimeError('ffmpeg failed to encode the video')
+    frames=math.ceil(duration*renderer.fps)
+    workers=render_workers() if workers is None else workers
+    workers=min(workers,max(1,frames//(8*renderer.fps)))  # chunks of at least ~8 s; process start-up is not free
+    metadata=['-map_metadata','-1',*aigc_arguments(hashlib.sha256((renderer.root/'job.json').read_bytes()).hexdigest()[:16])]
+    # Cut on a whole frame (the last frame keeps its full length, so the stream reports exactly fps) and pad the audio
+    # with silence up to that cut: at most one frame past the narration timeline.
+    length=str(frames/renderer.fps)
+    if workers<=1:
+        command=['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24','-s',f'{renderer.width}x{renderer.height}','-r',str(renderer.fps),'-i','-','-ss',str(start),'-i',str(renderer.work/'mix.wav'),*x264_arguments(),'-af','apad','-c:a','aac','-b:a','192k','-t',length,*metadata,str(temporary_path)]
+        process=subprocess.Popen(command,stdin=subprocess.PIPE)
+        for index in range(frames):
+            process.stdin.write(renderer.frame(start+index/renderer.fps).tobytes())
+            if index%(15*renderer.fps)==0:
+                print('RENDER',index/renderer.fps,'/',round(duration,2),flush=True)
+        process.stdin.close()
+        if process.wait()!=0:
+            raise RuntimeError('ffmpeg failed to encode the video')
+    else:
+        # Frames are independent functions of time, so contiguous chunks render in parallel and join without re-encoding.
+        # One timestamp tick per frame: chunk joins cannot round frame durations (which made the stream report 29.9997 fps).
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        chunks=renderer.work/'render-chunks'
+        shutil.rmtree(chunks,ignore_errors=True)
+        chunks.mkdir(parents=True)
+        bounds=np.linspace(0,frames,workers+1).round().astype(int)
+        jobs=[(str(renderer.root),chunks/f'chunk-{index:02d}.mp4',start,int(bounds[index]),int(bounds[index+1]-bounds[index])) for index in range(workers)]
+        print('RENDER',workers,'workers for',frames,'frames',flush=True)
+        with ProcessPoolExecutor(workers,mp_context=multiprocessing.get_context('spawn')) as pool:
+            parts=list(pool.map(render_chunk,*zip(*jobs)))
+        listing=chunks/'list.txt'
+        listing.write_text(''.join(f"file '{Path(part).name}'\n" for part in parts))
+        command=['ffmpeg','-y','-v','error','-f','concat','-safe','0','-i',str(listing),'-ss',str(start),'-i',str(renderer.work/'mix.wav'),
+                 '-map','0:v','-map','1:a','-c:v','copy','-video_track_timescale',str(renderer.fps),'-af','apad','-c:a','aac','-b:a','192k',
+                 '-t',length,*metadata,str(temporary_path)]
+        subprocess.run(command,check=True)
+        shutil.rmtree(chunks,ignore_errors=True)
     temporary_path.replace(path)
-
 
 
 def export_storyboard(renderer):
@@ -494,7 +794,7 @@ def export_storyboard(renderer):
     sheet=Image.new('RGB',(1280,360*rows),renderer.paper[:3])
     frames=[renderer.cover.convert('RGB')]
     for page in renderer.timeline['pages']:
-        frame=renderer.page_frame(page['index'],page['speech_end']-.15,False).convert('RGB')
+        frame=renderer.screen_board(page['index'],page['speech_end']-.15,False).convert('RGB')
         frame.save(review/f"page-{page['index']:02d}.jpg",quality=94)
         frames.append(frame)
     for index,frame in enumerate(frames):

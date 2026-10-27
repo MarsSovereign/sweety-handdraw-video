@@ -67,12 +67,15 @@ def ordered_paths(mask):
     for path in paths:
         coordinates = np.rint(path).astype(int)
         covered[coordinates[:,1],coordinates[:,0]] = True
-    # Keep broad stroke tips within nib distance without connecting across blank paper.
+    # Keep broad stroke tips within nib distance without connecting across blank paper. The nib reach follows the
+    # glyph's own stroke width: a large title's thick strokes are covered by the skeleton, not by dozens of stubs.
+    widths = ndimage.distance_transform_edt(mask)[skeleton]
+    reach = max(7., 1.5 * float(np.median(widths))) if len(widths) else 7.
     while True:
         distance, nearest = ndimage.distance_transform_edt(~covered, return_indices=True)
         distance[~mask] = 0
         y, x = np.unravel_index(np.argmax(distance), mask.shape)
-        if distance[y,x] <= 7:
+        if distance[y,x] <= reach:
             break
         anchor = np.array([nearest[1,y,x],nearest[0,y,x]],dtype=float)
         extension = np.linspace(anchor,[x,y],max(2,math.ceil(distance[y,x])+1))
@@ -208,6 +211,18 @@ def build_brush(name, width, height, color, style='highlight', line_width=None, 
         radius = (line_width or 4) / 2
         corners = np.array([[5,5],[width-6,4],[width-5,height-6],[4,height-5],[5,5]],dtype=float)
         points = np.vstack([np.linspace(a,b,max(2,round(np.linalg.norm(b-a)/2))) for a,b in zip(corners[:-1],corners[1:])])
+    elif style == 'bar':
+        # A chart bar colored like a marker: horizontal zigzag rows rising from the base, covering the whole box.
+        radius = float(np.clip(min(width, height) / 3, 4, 14))
+        spacing = 1.3 * radius
+        rows = np.arange(height - .6 * radius, .6 * radius - spacing, -spacing)
+        rows = np.r_[rows[rows > .6 * radius], .6 * radius] if len(rows) else np.array([height / 2])
+        points = []
+        for index, y in enumerate(rows):
+            xs = np.linspace(.4 * radius, width - .4 * radius, max(2, int(width / 2)))
+            points.append(np.c_[xs if index % 2 == 0 else xs[::-1], np.full(len(xs), y)])
+        points = np.vstack(points)
+        radius = spacing * .8
     else:
         raise ValueError(style)
     rgba = np.zeros((height,width,4),dtype=np.uint8)
@@ -218,9 +233,100 @@ def build_brush(name, width, height, color, style='highlight', line_width=None, 
     for point,distance in zip(points,distances):
         footprint = (xx-point[0])**2 + (yy-point[1])**2 <= radius**2
         reveal[footprint] = np.minimum(reveal[footprint],distance/max(.01,distances[-1]))
+    if style == 'bar':
+        # Every pixel of the bar is colored when the marker passes its nearest point; the brush reach is measured.
+        ys, xs = np.mgrid[:height, :width]
+        reach, nearest = cKDTree(points).query(np.c_[xs.ravel(), ys.ravel()])
+        reveal = (distances[nearest] / max(.01, distances[-1])).reshape(height, width).astype(np.float32)
+        radius = float(reach.max()) + 1.
     rgba[:,:,3] = np.isfinite(reveal).astype(np.uint8)*255
     segments=[{'kind':'brush','start':0.,'end':1.,'points':points.tolist(),'lengths':distances.tolist(),'radius':radius}]
     return save_asset(name,rgba,reveal,segments,{'type':'marker_'+style})
+
+
+def line_points(points, curve=0.):
+    """Polyline through the given points; with curve != 0 a two-point line bows by curve x its length."""
+    points = np.asarray(points, float)
+    if len(points) == 2 and curve:
+        start, end = points
+        normal = np.array([-(end - start)[1], (end - start)[0]])
+        control = (start + end) / 2 + curve * normal
+        u = np.linspace(0, 1, max(8, int(np.linalg.norm(end - start) / 4)))[:, None]
+        return (1 - u) ** 2 * start + 2 * u * (1 - u) * control + u * u * end
+    return np.vstack([np.linspace(a, b, max(2, int(np.linalg.norm(b - a) / 2) + 1))[:-1] for a, b in zip(points[:-1], points[1:])] + [points[-1:]])
+
+
+def build_line(name, points, width=5, color='#302C26', head='none', curve=0.):
+    """A pen line or arrow drawn stroke by stroke: the shaft from its first point, then each arrowhead barb.
+    points are in the caller's coordinates; the asset is the bounding box, and the offset to place it is returned."""
+    if head not in ('none', 'end', 'both'):
+        raise ValueError('Line head must be none, end or both')
+    path = line_points(points, curve)
+    if len(path) < 2 or np.linalg.norm(path[-1] - path[0]) + calculate_length(path) < 4:
+        raise ValueError('A line needs at least two distinct points')
+    strokes = [path]
+    barb = max(14., 3.6 * width)
+
+    def barbs(tip, before):
+        direction = tip - before
+        direction /= max(1e-6, np.linalg.norm(direction))
+        result = []
+        for angle in (math.radians(28), -math.radians(28)):
+            turn = np.array([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+            result.append(np.array([tip - barb * (turn @ direction), tip]))
+        return result
+    if head in ('end', 'both'):
+        strokes += barbs(path[-1], path[max(0, len(path) - 6)])
+    if head == 'both':
+        strokes += barbs(path[0], path[min(len(path) - 1, 5)])
+    every = np.vstack(strokes)
+    margin = width + 4
+    origin = np.floor(every.min(0)) - margin
+    size = (np.ceil(every.max(0)) - origin + margin).astype(int)
+    local = [stroke - origin for stroke in strokes]
+    image = Image.new('L', tuple(int(value) for value in size))
+    draw = ImageDraw.Draw(image)
+    for stroke in local:
+        draw.line([tuple(point) for point in stroke], fill=255, width=int(round(width)), joint='curve')
+        for end in (stroke[0], stroke[-1]):
+            draw.ellipse([end[0] - width / 2, end[1] - width / 2, end[0] + width / 2, end[1] + width / 2], fill=255)
+    alpha = np.array(image)
+    paths = [line_topology.resample(stroke) for stroke in local]
+    reveal, segments = time_paths(paths, alpha.shape)
+    reveal[alpha == 0] = np.inf
+    for segment in segments:
+        if segment['kind'] == 'ink':
+            segment['radius'] = width / 2 + 2.
+    rgba = np.zeros(alpha.shape + (4,), np.uint8)
+    rgba[:, :, :3] = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+    rgba[:, :, 3] = alpha
+    metadata = save_asset(name, rgba, reveal, segments, {'type': 'line', 'head': head})
+    metadata['offset'] = origin.tolist()
+    return metadata
+
+
+def calculate_length(path):
+    return float(lengths(path)[-1])
+
+
+def build_counter(name, start, end, font_path, size, color='#302C26', decimals=0, prefix='', suffix='', font_index=0):
+    """A number that counts up (or down) once drawn into place: typeset frames are produced by the renderer;
+    the asset is the final value in a box wide enough for every intermediate value."""
+    font = ImageFont.truetype(str(font_path), int(size), index=int(font_index))
+    text = lambda value: f'{prefix}{value:,.{int(decimals)}f}{suffix}'
+    samples = [text(value) for value in np.linspace(float(start), float(end), 12)]
+    width = int(max(font.getlength(sample) for sample in samples)) + 12
+    box = font.getbbox(text(float(end)))
+    height = int(box[3] - min(0, box[1]) + 12)
+    image = Image.new('RGBA', (width, height))
+    ImageDraw.Draw(image).text((6, 6 - min(0, box[1])), text(float(end)), font=font, fill=color)
+    np.savez_compressed(ASSET_DIRECTORY / f'{name}.npz', reveal=np.zeros((height, width), np.float32))
+    image.save(ASSET_DIRECTORY / f'{name}.png')
+    metadata = {'name': name, 'type': 'counter', 'width': width, 'height': height, 'segments': [],
+                'counter': {'from': float(start), 'to': float(end), 'decimals': int(decimals), 'prefix': prefix, 'suffix': suffix,
+                            'font': {'path': str(font_path), 'index': int(font_index)}, 'size': int(size), 'color': color, 'origin': [6, 6 - min(0, box[1])]}}
+    (ASSET_DIRECTORY / f'{name}.json').write_text(json.dumps(metadata, ensure_ascii=False))
+    return metadata
 
 
 def paper_color(rgb):
@@ -229,6 +335,47 @@ def paper_color(rgb):
     border = np.concatenate([rgb[:ring].reshape(-1, 3), rgb[-ring:].reshape(-1, 3), rgb[:, :ring].reshape(-1, 3), rgb[:, -ring:].reshape(-1, 3)])
     paper = np.median(border, axis=0)
     return paper if paper.min() >= 200 and np.ptp(paper) <= 30 else np.full(3, 255.)
+
+
+LINE_BAND = 5.2    # px: dark pixels this close to the edge of a dark area may be its outline
+FILL_DEPTH = 6.    # px: dark pixels this deep inside a dark area are paint, not line
+DARKER_LINE = 18.  # luminance: an outline around a dark fill must be at least this much darker than the fill
+BLACK_FILL = 60.   # luminance: a fill this dark is a black shape; its thin rim is drawn as its outline
+INK_TONE_MARGIN = 45.  # luminance above the picture's typical ink that a line pixel may still have
+WEAK_CONTRAST = 110.  # RGB distance below which ink and the paint beneath it cannot be unmixed reliably
+
+
+def ink_lines(pixels, dark, size=1.):
+    """Pixels a pen inks: thin dark marks, and the rim of a dark area only where a line darker than the area
+    runs along it. The edge band of a navy hoodie, a night sky around the moon or a teal screen is paint;
+    drawing it as line made the line pass grainy and showed the fill twice."""
+    # Line widths grow with the picture (size = line_drawing.picture_size): the thresholds follow them.
+    depth = ndimage.distance_transform_edt(dark)
+    band = dark & (depth < LINE_BAND * size)
+    deep = dark & (depth >= FILL_DEPTH * size)
+    if not deep.any():
+        return band
+    luminance = pixels[:, :, :3].astype(float) @ [.299, .587, .114]
+    # Reference tone of the fill each band pixel borders: the nearest deep interior, median-smoothed against grain.
+    distance, nearest = ndimage.distance_transform_edt(~deep, return_indices=True)
+    fill_tone = ndimage.median_filter(luminance[nearest[0], nearest[1]], size=5)
+    bordering = distance <= (FILL_DEPTH + 1.5) * size
+    darker = luminance < fill_tone - DARKER_LINE
+    rim = (depth <= 2.2 * size) & (fill_tone < BLACK_FILL)
+    lines = band & (~bordering | darker | rim)
+    # A small colored area (a teal screen between a robot's eyes) has no deep interior to compare with:
+    # line pixels must also be about as dark as the picture's own ink, measured on its unmistakable thin lines.
+    core = band & ~bordering & (depth >= 1.5 * size)
+    if core.sum() >= 40:
+        lines &= luminance <= np.percentile(luminance[core], 30) + INK_TONE_MARGIN
+    # Crumbs of a fill edge that passed the tests by grain are not marks: drop pieces under 20 px cut from a larger area.
+    pieces, count = ndimage.label(lines, structure=np.ones((3, 3)))
+    if count:
+        areas, _ = ndimage.label(band, structure=np.ones((3, 3)))
+        piece_size, area_size = np.bincount(pieces.ravel()), np.bincount(areas.ravel())
+        crumbs = (piece_size[pieces] < 20) & (area_size[areas] >= 60) & lines
+        lines &= ~crumbs
+    return lines
 
 
 def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_path=None):
@@ -259,7 +406,9 @@ def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_
     red,green,blue=[pixels[:,:,channel].astype(float) for channel in range(3)]
     cool_ink=(blue>=red+4)&(blue>=green-4)&(red<218)
     dark=((maximum<125)|cool_ink)&(alpha>30)
-    outline=dark&(ndimage.distance_transform_edt(dark)<5.2)
+    size=line_drawing.picture_size(pixels.shape[1],pixels.shape[0])
+    band=dark&(ndimage.distance_transform_edt(dark)<LINE_BAND*size)
+    outline=ink_lines(pixels,dark,size)
     support=(maximum<165)&(alpha>30)
     if outline_mask_path is not None:
         explicit = Image.open(outline_mask_path).convert('L')
@@ -269,9 +418,10 @@ def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_
             explicit = explicit.crop(tuple(crop))
         explicit = explicit.resize(artwork.size,Image.Resampling.NEAREST)
         outline = (np.array(explicit)>127)&(alpha>0)
+        band = outline
     if not (alpha>0).any():
         raise ValueError('Illustration is empty after background removal')
-    return {'artwork':artwork,'pixels':pixels,'alpha':alpha,'outline':outline,'support':support}
+    return {'artwork':artwork,'pixels':pixels,'alpha':alpha,'outline':outline,'band':band,'support':support}
 
 
 def polygon_owners(parts, artwork, alpha):
@@ -360,9 +510,33 @@ def source_ink_layer(pixels, paint, clean, zone):
     rgb = pixels[:, :, :3].astype(np.float32)
     ink_rgb, under, painted = rgb[core[0], core[1]], paint[:, :, :3].astype(np.float32), paint[:, :, 3] > 0
     toward = ink_rgb - under
-    share = np.clip(((rgb - under) * toward).sum(2) / np.maximum((toward ** 2).sum(2), 1.), 0, 1)
-    alpha = np.where(painted, share, pixels[:, :, 3] / 255.) * zone
+    contrast = (toward ** 2).sum(2)
+    share = np.clip(((rgb - under) * toward).sum(2) / np.maximum(contrast, 1.), 0, 1)
+    # Ink over a paint of similar color (black line on navy) divides grain by a small contrast: the noise read as
+    # specks of ink scattered over the fill. There the pixel is ink or paint, with a short soft step between.
+    weak = contrast < WEAK_CONTRAST ** 2
+    snapped = np.clip((share - .3) / .45, 0, 1)
+    share = np.where(weak, snapped * snapped * (3 - 2 * snapped), share)
+    alpha = drop_loose_specks(np.where(painted, share, pixels[:, :, 3] / 255.) * zone)
     return np.where(painted[..., None], ink_rgb, rgb), (np.rint(alpha * 255) / 255).astype(np.float32)
+
+
+def drop_loose_specks(alpha, size=6, reach=2):
+    """A few pixels of ink standing alone beside a fill edge are unmixing residue, not a mark anyone drew;
+    they stay in the paint layer. Specks touching a real line (within reach px) are its ragged edge and stay."""
+    labels, count = ndimage.label(alpha > .3, structure=np.ones((3, 3)))
+    if not count:
+        return alpha
+    sizes = np.bincount(labels.ravel())
+    small = sizes <= size
+    small[0] = False
+    lines = (labels > 0) & ~small[labels]
+    near = ndimage.binary_dilation(lines, iterations=reach)
+    loose = small[labels] & ~near
+    if loose.any():
+        alpha = alpha.copy()
+        alpha[ndimage.binary_dilation(loose) & ~near] = 0
+    return alpha
 
 
 def source_ink(pixels, paint, clean, zone, strokes):
@@ -379,6 +553,57 @@ def source_ink(pixels, paint, clean, zone, strokes):
     return rgb, alpha, ink_time, ink_owner
 
 
+def snap_owners(owners, outline, pixels, alpha, part_count, colors=16):
+    """A model's part polygon is coarse (often a box) and cuts straight through a shape: coloring part by part then
+    paints a rectangle of a continuous area at a time. So each piece of one color inside an area the ink encloses goes
+    wholly to the part that owns most of it, and every other pixel (anti-aliasing, the paint under a line) follows the
+    nearest piece. This is the paint order only: strokes are still classified by the polygon owners."""
+    enclosed = (alpha > 0) & ~ndimage.binary_dilation(outline)
+    if not enclosed.any():
+        return owners
+    palette_image = Image.fromarray(np.ascontiguousarray(pixels[:, :, :3])).quantize(colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    quantized = np.array(palette_image)
+    # Faint shading splits one flat colour into near-identical palette entries: those are one paint, not separate pieces.
+    swatches = np.array(palette_image.getpalette()[:3 * colors], float).reshape(-1, 3)
+    same = np.arange(len(swatches))
+    for first in range(len(swatches)):
+        for second in range(first + 1, len(swatches)):
+            if np.linalg.norm(swatches[first] - swatches[second]) < 22:
+                same[same == same[second]] = same[first]
+    quantized = same[quantized]
+    pieces, count = np.zeros(alpha.shape, np.int64), 0
+    for value in np.unique(quantized[enclosed]):
+        labels, found = ndimage.label(enclosed & (quantized == value))
+        pieces[labels > 0] = labels[labels > 0] + count
+        count += found
+    inside = (pieces > 0) & (owners >= 0)
+    tally = np.bincount(pieces[inside] * part_count + owners[inside], minlength=(count + 1) * part_count).reshape(count + 1, part_count)
+    sizes = tally.sum(1)
+    # A piece is an area, not a seam: it must hold a pixel 2.5 px from its edge (a thin shading line follows its area).
+    edge = np.zeros(alpha.shape, bool)
+    edge[:-1] |= pieces[:-1] != pieces[1:]
+    edge[1:] |= pieces[1:] != pieces[:-1]
+    edge[:, :-1] |= pieces[:, :-1] != pieces[:, 1:]
+    edge[:, 1:] |= pieces[:, 1:] != pieces[:, :-1]
+    depth = np.zeros(count + 1)
+    depth[1:] = ndimage.maximum(ndimage.distance_transform_edt(~edge), pieces, np.arange(1, count + 1))
+    # ... unless the ink encloses that piece alone: a small closed shape (a button, a prop between curls) is deliberate.
+    cells, _ = ndimage.label(enclosed)
+    cell_of = np.zeros(count + 1, np.int64)
+    cell_of[pieces[enclosed]] = cells[enclosed]
+    whole = sizes == np.bincount(cells[enclosed], minlength=cells.max() + 1)[cell_of]
+    solid = ((sizes >= max(24, 2e-4 * enclosed.sum())) & (depth >= 2.5)) | (whole & (sizes > 0))
+    solid[0] = False
+    snapped = owners.copy()
+    keep = solid[pieces]
+    snapped[keep] = tally.argmax(1)[pieces[keep]]
+    rest = (alpha > 0) & ~keep
+    if rest.any() and keep.any():
+        _, nearest = ndimage.distance_transform_edt(~keep, return_indices=True)
+        snapped[rest] = snapped[nearest[0], nearest[1]][rest]
+    return snapped
+
+
 def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, ownership):
     """Reveal mode for styles without ink outlines (watercolor, gouache, paper cut, pixel...): part by part the hand
     sweeps a broad soft brush and the finished picture shows only where it has passed. No line layer, no shading pass."""
@@ -389,13 +614,15 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
     # One region per part: the brush follows the part, not the palette of a painted surface.
     regions = paint_motion.color_regions(rgb, visible, owners_everywhere, len(names), np.ones(shape, np.int32))
     for region in regions:
-        region.update(tilt=.35, soft=.6, brush=2.5)
+        region.update(tilt=.35, soft=.6, brush=2.5, edges=False, streaks=False)
     ys, xs = np.nonzero(visible)
     tip = np.array([xs.mean(), ys.min()], dtype=float)
-    fill = paint_motion.requirements(regions, rgb, len(names), tip, speed, FPS, shade=False)
+    size = line_drawing.picture_size(*shape[::-1])
+    speed = speed * size
+    fill = paint_motion.requirements(regions, rgb, len(names), tip, speed, FPS, shade=False, size=size)
     paced = max(fill['minimum'], fill['required'] / line_drawing.VIDEO_LAPSE)
     total = min(float(seconds), paced) if seconds else float(np.clip(paced, 1, 30))
-    segments, fill_parts, _, _, _, counts = paint_motion.schedule(regions, rgb, len(names), tip, total, 0., total, speed, FPS, shade=False)
+    segments, fill_parts, _, _, _, counts = paint_motion.schedule(regions, rgb, len(names), tip, total, 0., total, speed, FPS, shade=False, size=size)
     first, cover, full, _, _ = paint_motion.render(shape, regions, [], owners_everywhere)
     ending = float(max([segment['end'] for segment in segments] + [full[np.isfinite(full)].max(initial=0.)]))
     if ending > 1:
@@ -405,7 +632,8 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
         fill_parts = [[value / ending for value in part] for part in fill_parts]
     never = np.full(shape, np.inf, np.float32)
     maps = {'ink': never, 'ink_owner': np.full(shape, -1, np.int16), 'color': first.astype(np.float32),
-            'color_cover': cover, 'color_full': full.astype(np.float32), 'shade': never, 'shade_ramp': np.float32(1e-3)}
+            'color_cover': cover, 'color_full': full.astype(np.float32), 'shade': never, 'shade_ramp': np.float32(1e-3),
+            'paint_ramps': paint_motion.ramps(total, FPS) / max(1., ending)}
     empty = np.zeros(shape + (4,), np.uint8)
     final = illustration_layers.prepare(maps, empty, pixels, pixels)['final']
     owners_final = np.where(final[:, :, 3] > 0, owners_everywhere, -1).astype(np.int16)
@@ -418,7 +646,7 @@ def build_reveal(name, source_path, artwork, pixels, alpha, names, owners, secon
     segments.sort(key=lambda segment: segment['start'])
     drawability = {'line_length_px': 0, 'stroke_count': 0, 'drawn_stroke_count': 0, 'fill_area_px': int(visible.sum()),
                    'required_seconds': round(float(fill['required']), 2), 'minimum_seconds': round(float(fill['minimum']), 2), 'lineart_gate': None}
-    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'mode': 'reveal', 'source': str(source_path), 'width': artwork.width,
+    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v3', 'mode': 'reveal', 'source': str(source_path), 'width': artwork.width,
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports, 'layers': ['paint'],
                 'lines': {}, 'painting': counts, 'drawability': drawability, 'ownership': ownership, 'lineart_exception': None,
                 'time_compression': round(max(1., ending), 3),
@@ -450,15 +678,23 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         raise ValueError('Illustrations require model-designed semantic parts: part_regions (region_marks.py) or ordered normalized polygons')
     if mode == 'reveal':
         return build_reveal(name, source_path, artwork, pixels, alpha, names, owners, seconds, speed, 'regions' if part_regions else 'polygons')
+
     for index, part_id in enumerate(names):
         if not (outline & (owners == index)).any():
+            # A part drawn only as a dark fill with no darker line around it: its own rim is the outline a person draws.
+            rim = art['band'] & (owners == index) & (ndimage.distance_transform_edt(art['band'] & (owners == index)) <= 2.2)
+            outline = outline | rim
+        if not (outline & (owners == index)).any():
             raise ValueError('Part has no drawable outline; prepare a contour layer/mask before generation: '+part_id)
-    strokes, clean, skeleton, topology = line_topology.extract_strokes(outline, art['support'])
+    size = line_drawing.picture_size(shape[1], shape[0])
+    strokes, clean, skeleton, topology = line_topology.extract_strokes(outline, art['support'], size)
     gate = lineart_gate.evaluate(outline, strokes, clean, skeleton)
     if not gate['passed'] and not lineart_exception:
         raise ValueError(lineart_gate.failure_message(gate))
-    _, nearest = ndimage.distance_transform_edt(owners < 0, return_indices=True)
-    owners_everywhere = owners[nearest[0], nearest[1]]
+    # Paint follows the drawing's own areas; a model's coarse part polygons only classify the strokes.
+    paint_owners = owners if part_regions else snap_owners(owners, outline, pixels, alpha, len(names))
+    _, nearest = ndimage.distance_transform_edt(paint_owners < 0, return_indices=True)
+    owners_everywhere = paint_owners[nearest[0], nearest[1]]
     # The soft grey edge of a line (anti-aliasing, compression ringing) belongs to the line, not to marker paint:
     # neutral pixels next to a line are refilled from the nearest real paint (paper on line-only art).
     neutral = np.ptp(pixels[:, :, :3].astype(int), axis=2) <= 24
@@ -470,11 +706,14 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
     line_drawing.classify(strokes, owners, alpha, pixels, names, {part['id'] for part in declared if part.get('key')})
     painted = shade_pixels[:, :, 3] > 0
     shade_rgb = shade_pixels[:, :, :3].astype(float)
-    regions = paint_motion.color_regions(shade_rgb, painted, owners_everywhere, len(names), labels)
+    regions = paint_motion.color_regions(shade_rgb, painted, owners_everywhere, len(names), labels, size)
     ys, xs = np.nonzero(alpha > 0)
     tip = np.array([xs.mean(), ys.min()], dtype=float)
-    lines = line_drawing.requirements(strokes, len(names), tip, speed, FPS)
-    fill = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS) if regions else {'required': 0., 'moderate': 0., 'minimum': 0.}
+    # Timing follows the picture, not the screen: a larger picture is drawn with proportionally longer, faster moves.
+    size = line_drawing.picture_size(shape[1], shape[0])
+    speed = speed * size
+    lines = line_drawing.requirements(strokes, len(names), tip, speed, FPS, size)
+    fill = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS, size=size) if regions else {'required': 0., 'moderate': 0., 'minimum': 0.}
     shaded = bool(regions) and bool(paint_motion.shaded_parts(regions, shade_rgb, len(names)))
     ramp = paint_motion.SHADE_RAMP if shaded else 0.
     paced = max(lines['all_at_cap'] + fill['minimum'] + ramp, (lines['required'] + fill['required'] + ramp) / line_drawing.VIDEO_LAPSE)
@@ -521,13 +760,13 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
             stretch = min(1.6, available / max(1e-6, line_budget + fill_budget))
             line_budget, fill_budget = line_budget * stretch, fill_budget * stretch
         ordered, line_segments, line_parts, line_end, line_counts = line_drawing.schedule(
-            strokes, len(names), tip, line_budget, cursor, total, speed, FPS)
+            strokes, len(names), tip, line_budget, cursor, total, speed, FPS, size)
         segments += line_segments
         line_rgb, line_alpha, ink, ink_owner = source_ink(pixels, shade_pixels, clean, line_zone, strokes)
         tip = ordered[-1]['points'][-1] if ordered else tip
         # The marker minimum must start where the lines end, not at the picture top: the storyboard gate
         # reads minimum_seconds, and the fill below begins its travel at this tip.
-        fill_minimum = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS, shade=False)['minimum'] if regions else 0.
+        fill_minimum = paint_motion.requirements(regions, shade_rgb, len(names), tip, speed, FPS, shade=False, size=size)['minimum'] if regions else 0.
         minimum_total = (lines['all_at_cap'] + fill_minimum + ramp) / (1. - 1. / illustration_layers.SHARP)
         if attempt < 2 and total < minimum_total - 1e-6 and total < ceiling - 1e-6:
             total = min(ceiling, minimum_total)
@@ -535,14 +774,15 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         fill_parts, bands, fill_counts = [[line_end, line_end] for _ in names], [], {}
         if regions:
             fill_segments, fill_parts, bands, _, tip, fill_counts = paint_motion.schedule(
-                regions, shade_rgb, len(names), tip, fill_budget, line_end * total, total, speed, FPS)
+                regions, shade_rgb, len(names), tip, fill_budget, line_end * total, total, speed, FPS, size=size)
             segments += fill_segments
         first, cover, full, flat, shade = paint_motion.render(shape, regions, bands, owners_everywhere)
         maps = {'ink': ink, 'ink_owner': ink_owner, 'color': first, 'color_cover': cover, 'color_full': full,
-                'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total)}
+                'shade': shade, 'shade_ramp': np.float32(max(ramp, 1e-3) / total), 'paint_ramps': paint_motion.ramps(total, FPS)}
         # Two-frame floors and lift minimums can overrun an impossible budget: compress the whole asset uniformly.
         finite = lambda values: values[np.isfinite(values)]
-        ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + 1 / illustration_layers.SHARP).max(initial=0.), finite(full).max(initial=0.),
+        ending = float(max([segment['end'] for segment in segments] + [line_end, finite(ink + 1 / illustration_layers.SHARP).max(initial=0.),
+                            finite(full).max(initial=0.),
                             finite(shade).max(initial=0.) + float(maps['shade_ramp'])] + ([line_end + .5 / total] if sketches else [])))
         if ending <= 1. or total >= ceiling - 1e-9:
             break
@@ -555,7 +795,7 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
         sketch_layer = np.dstack([np.rint(sketch_rgb), np.rint(sketch_alpha * 120)]).astype(np.uint8)
         maps.update(sketch=sketch_time, sketch_fade=np.array([line_end, .5 / total], np.float32))
     if ending > 1:
-        for key in ('ink', 'color', 'color_full', 'shade', 'shade_ramp', 'sketch', 'sketch_fade'):
+        for key in ('ink', 'color', 'color_full', 'shade', 'shade_ramp', 'paint_ramps', 'sketch', 'sketch_fade'):
             if key in maps:
                 maps[key] = (maps[key] / ending).astype(np.float32)
         for segment in segments:
@@ -576,11 +816,129 @@ def build_illustration(name, source_path, max_width, max_height, crop=None, part
                    'drawn_stroke_count': line_counts['drawn_stroke_count'],
                    'fill_area_px': int(painted.sum()), 'required_seconds': round(lines['required'] + fill['required'] + ramp, 2),
                    'minimum_seconds': round(lines['all_at_cap'] + fill_minimum + ramp, 2), 'lineart_gate': gate}
-    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v2', 'source': str(source_path), 'width': artwork.width,
+    metadata = {'name': name, 'type': 'illustration', 'engine': 'draw-v3', 'source': str(source_path), 'width': artwork.width,
                 'height': artwork.height, 'seconds': total, 'segments': segments, 'parts': part_reports,
                 'layers': ['paint', 'shade'] + (['sketch'] if sketches else []) + ['line'],
                 'lines': {**topology, **line_counts}, 'painting': fill_counts, 'drawability': drawability,
                 'ownership': 'regions' if part_regions else 'polygons', 'lineart_exception': lineart_exception, 'time_compression': round(max(1., ending), 3),
+                'picture_scale': round(size, 3),
                 'idle_seconds': round(max(0., total - max([segment['end'] for segment in segments] + [0.]) * total), 2)}
     (ASSET_DIRECTORY/f'{name}.json').write_text(json.dumps(metadata))
+    return metadata
+
+
+def upsample(values, shape):
+    """Nearest-neighbour resample of a per-pixel map to a larger grid (each fine pixel takes its coarse pixel)."""
+    values = np.asarray(values)
+    rows = np.minimum((np.arange(shape[0]) * values.shape[0] / shape[0]).astype(int), values.shape[0] - 1)
+    columns = np.minimum((np.arange(shape[1]) * values.shape[1] / shape[1]).astype(int), values.shape[1] - 1)
+    return values[rows][:, columns]
+
+
+def render_at(name, source_path, factor, crop=None, outline_mask_path=None):
+    """Re-render a built illustration's pixels at `factor` x its planned size, keeping the plan: strokes, timing and
+    parts stay those of the layout size (so a camera close-up does not add detail strokes or drawing time), while
+    the line, paint and shade layers come from the source at the larger size and every time map is carried over by
+    nearest-neighbour upsampling. Used for pages whose camera pushes in."""
+    if factor <= 1.001:
+        return json.loads((ASSET_DIRECTORY / f'{name}.json').read_text())
+    metadata = json.loads((ASSET_DIRECTORY / f'{name}.json').read_text())
+    maps = dict(np.load(ASSET_DIRECTORY / f'{name}.npz'))
+    width, height = round(metadata['width'] * factor), round(metadata['height'] * factor)
+    art = prepare_artwork(source_path, width, height, crop, outline_mask_path)
+    pixels, alpha = art['pixels'], art['alpha']
+    shape = alpha.shape
+    big = {key: (upsample(value, shape) if np.ndim(value) == 2 else value) for key, value in maps.items()}
+    if 'color_cover' in maps:  # a continuous coat strength (felt streaks): interpolated, not blocky
+        big['color_cover'] = np.clip(ndimage.zoom(np.asarray(maps['color_cover'], np.float32),
+                                                  (shape[0] / maps['color_cover'].shape[0], shape[1] / maps['color_cover'].shape[1]), order=1), 0, 1)[:shape[0], :shape[1]]
+    if metadata.get('mode') == 'reveal':
+        line_layer = np.zeros(shape + (4,), np.uint8)
+        paint_layer = shade_pixels = pixels
+    else:
+        # The plan's split between ink and paint carries over: the fine line zone is the planned line layer scaled up
+        # (its solid core gives the ink colour), so the larger render draws exactly the lines the plan timed.
+        coarse_line = np.array(Image.open(ASSET_DIRECTORY / f'{name}-line.png').convert('RGBA'))[:, :, 3]
+        line_zone = upsample(ndimage.binary_dilation(coarse_line > 0), shape)
+        clean = upsample(coarse_line > 150, shape) & line_zone
+        shade_pixels = paint_motion.inpaint_lines(pixels, line_zone)
+        shade_pixels[:, :, 3] = np.where(shade_pixels[:, :, 3] >= 96, shade_pixels[:, :, 3], 0)
+        line_rgb, line_alpha = source_ink_layer(pixels, shade_pixels, clean, line_zone)
+        # Fine ink the coarse plan never timed (a hair-thin edge) takes the time of the nearest timed ink.
+        ink = big['ink']
+        timed = np.isfinite(ink)
+        if (line_alpha > 0).any() and timed.any():
+            _, nearest = ndimage.distance_transform_edt(~timed, return_indices=True)
+            ink = np.where(timed, ink, ink[nearest[0], nearest[1]])
+            big['ink'] = np.where(line_alpha > 0, ink, np.inf).astype(np.float32)
+            big['ink_owner'] = np.where(line_alpha > 0, big['ink_owner'][nearest[0], nearest[1]], -1).astype(np.int16)
+        line_layer = np.dstack([np.rint(line_rgb), np.rint(line_alpha * 255)]).astype(np.uint8)
+        painted = shade_pixels[:, :, 3] > 0
+        # Paint a fine pixel when the marker reaches the nearest painted pixel of the same part (parts keep their order);
+        # a speck of paint only the larger render shows, far from any planned paint, is left out (a few pixels).
+        owners_big = upsample(maps['owners'], shape)
+        owned = owners_big >= 0
+        if owned.any() and not owned.all():
+            _, nearest = ndimage.distance_transform_edt(~owned, return_indices=True)
+            owners_big = owners_big[nearest[0], nearest[1]]
+        stray = np.zeros(shape, bool)
+        for key in ('color', 'color_full', 'shade'):
+            if key not in big:
+                continue
+            values = big[key].copy()
+            for part in np.unique(owners_big[painted]):
+                mine = owners_big == part
+                known = np.isfinite(values) & mine
+                missing = painted & mine & ~np.isfinite(values)
+                if not missing.any():
+                    continue
+                if not known.any():
+                    stray |= missing
+                    continue
+                distance, nearest = ndimage.distance_transform_edt(~known, return_indices=True)
+                close = missing & (distance <= 3 * factor)
+                values[close] = values[nearest[0][close], nearest[1][close]]
+                stray |= missing & ~close
+            big[key] = values.astype(np.float32)
+        if stray.any():
+            shade_pixels[stray, 3] = 0
+            painted &= ~stray
+        flat = upsample(np.array(Image.open(ASSET_DIRECTORY / f'{name}-paint.png').convert('RGBA'))[:, :, :3], shape)
+        paint_layer = np.dstack([flat, shade_pixels[:, :, 3]]).astype(np.uint8)
+        if 'color_cover' in big:
+            big['color_cover'] = np.where(painted & (big['color_cover'] == 0), 1., big['color_cover']).astype(np.float32)
+    sketch = None
+    if (ASSET_DIRECTORY / f'{name}-sketch.png').exists():
+        sketch = np.array(Image.open(ASSET_DIRECTORY / f'{name}-sketch.png').convert('RGBA').resize((width, height), Image.Resampling.BILINEAR))
+    owners = big.pop('owners')
+    final = illustration_layers.prepare(big, line_layer, paint_layer, shade_pixels, sketch)['final']
+    owners_big = upsample(owners, shape)
+    owned = owners_big >= 0
+    if owned.any() and not owned.all():  # a fine edge pixel outside the coarse picture belongs to its nearest part
+        _, nearest = ndimage.distance_transform_edt(~owned, return_indices=True)
+        owners_big = owners_big[nearest[0], nearest[1]]
+    owners_final = np.where(final[:, :, 3] > 0, owners_big, -1).astype(np.int16)
+    for suffix, layer in (('line', line_layer), ('paint', paint_layer), ('shade', shade_pixels), ('sketch', sketch)):
+        if layer is not None:
+            Image.fromarray(layer).save(ASSET_DIRECTORY / f'{name}-{suffix}.png')
+    Image.fromarray(final).save(ASSET_DIRECTORY / f'{name}.png')
+    np.savez_compressed(ASSET_DIRECTORY / f'{name}.npz', owners=owners_final, **big)
+    sx, sy = width / metadata['width'], height / metadata['height']
+    for segment in metadata['segments']:
+        points = np.asarray(segment['points'], float) * [sx, sy]
+        weights = np.asarray(segment['lengths'], float) * (sx + sy) / 2 if 'lengths' in segment else None
+        if segment['kind'] in ('ink', 'sketch') and len(points) > 1 and weights is not None and len(weights) == len(points):
+            # A sample every pixel along the inked path (the verifier checks the nib never jumps between samples). The
+            # nib keeps the plan's timing: its curvature-weighted length is carried over to the new samples.
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+            fine = np.linspace(0, arc[-1], max(2, int(np.ceil(arc[-1])) + 1))
+            weights = np.interp(fine, arc, weights)
+            points = np.c_[np.interp(fine, arc, points[:, 0]), np.interp(fine, arc, points[:, 1])]
+        segment['points'] = points.tolist()
+        if weights is not None:
+            segment['lengths'] = weights.tolist()
+        if 'radius' in segment:
+            segment['radius'] *= (sx + sy) / 2
+    metadata.update(width=width, height=height, render_scale=round(factor, 3))
+    (ASSET_DIRECTORY / f'{name}.json').write_text(json.dumps(metadata))
     return metadata

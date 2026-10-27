@@ -247,8 +247,10 @@ def build_line(text, font, size, color, seconds=None, fps=30, margin=5):
         shape = (max(1, box[3] - box[1]), max(1, box[2] - box[0]))
         entries = []
         if strokes is not None:
-            for polygon, median in strokes:
-                patch = rasterize(polygon, shape, np.array(box[:2]), size * BOLD)
+            for number, (polygon, median) in enumerate(strokes):
+                # A real pen presses unevenly: vary each stroke's weight so the line reads hand-written, not typeset.
+                factor = .82 + .5 * (((ord(character) * 2654435761 + number * 40503) % 1000) / 1000.)
+                patch = rasterize(polygon, shape, np.array(box[:2]), size * BOLD * factor)
                 points = extend_to_tips(densify(push_corners(median - box[:2], patch, size)), patch, size * .1)
                 entries.append((patch, densify(points) + offset))
         else:

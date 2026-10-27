@@ -3,3 +3,5 @@ numpy>=1.24,<3
 scipy>=1.10,<2
 requests>=2.31,<3
 fonttools>=4.38,<5
+pypinyin>=0.50,<1
+jieba>=0.42,<1

@@ -119,7 +119,7 @@ def clean(source, start, end, transcript, output, context=3., separate=True, den
               'reference_sha256': sha256(target), 'transcript_sha256': hashlib.sha256(transcript.strip().encode()).hexdigest(),
               'duration_seconds': round(duration, 3), 'listening': 'pending'}
     words = transcribe(target) if asr else None
-    record['asr'] = covers(transcript, words['text']) if words else {'status': 'not_available'}
+    record['asr'] = covers(transcript, words['text'], homophones=False) if words else {'status': 'not_available'}
     (output/'clean-record.json').write_text(json.dumps(record, ensure_ascii=False, indent=2))
     if record['gate_after']['status'] != 'PASS' or record['asr']['status'] == 'fail':
         raise ValueError('Cleaned reference failed: ' + json.dumps({'gate': record['gate_after']['failures'], 'asr': record['asr']}, ensure_ascii=False))
