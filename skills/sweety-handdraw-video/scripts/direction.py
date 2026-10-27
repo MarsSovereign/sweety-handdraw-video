@@ -65,6 +65,46 @@ def frame_for(boxes, width, height, vertical):
     return center, zoom
 
 
+def view_rect(center, zoom, width, height):
+    half_w, half_h = width / (2 * zoom), height / (2 * zoom)
+    cx = min(max(center[0], half_w), width - half_w)
+    cy = min(max(center[1], half_h), height - half_h)
+    return cx - half_w, cy - half_h, cx + half_w, cy + half_h
+
+
+def cut_through(rect, area):
+    """True when the frame edge slices through the area (part of it shows, part does not)."""
+    inside = rect[0] <= area[0] and rect[1] <= area[1] and area[2] <= rect[2] and area[3] <= rect[3]
+    outside = area[2] <= rect[0] or area[0] >= rect[2] or area[3] <= rect[1] or area[1] >= rect[3]
+    return not inside and not outside
+
+
+def keep_titles_whole(center, zoom, segment, texts, width, height, vertical):
+    """A push-in must not slice a title or label already on the page: take it into the frame when that still leaves a
+    real close-up, otherwise move the frame until the text is wholly out of view."""
+    for start, area in texts:
+        if start >= segment['start'] or not cut_through(view_rect(center, zoom, width, height), area):
+            continue
+        widened, wider_zoom = frame_for(segment['boxes'] + [area], width, height, vertical)
+        if wider_zoom >= 1.12:
+            center, zoom = widened, wider_zoom
+            continue
+        rect = view_rect(center, zoom, width, height)
+        if area[3] <= (rect[1] + rect[3]) / 2:      # the text sits above the focus: lower the frame below it
+            shift = area[3] - rect[1] + 8
+        else:                                        # below the focus: raise the frame above it
+            shift = area[1] - rect[3] - 8
+        focus_top, focus_bottom = min(b[1] for b in segment['boxes']), max(b[3] for b in segment['boxes'])
+        moved = view_rect([center[0], center[1] + shift], zoom, width, height)
+        if moved[1] <= focus_top and focus_bottom <= moved[3] and not cut_through(moved, area):
+            center = [center[0], center[1] + shift]
+        else:
+            center, zoom = widened, wider_zoom   # a gentler push that shows the whole title beats a sliced one
+        if cut_through(view_rect(center, zoom, width, height), area):
+            center, zoom = [width / 2, height / 2], 1.   # still sliced (the frame leans down for the captions): show the page
+    return center, zoom
+
+
 def auto_camera(page, assets, width, height, index=0):
     """Camera keys (page-relative seconds) for a page the model left plain: frame each picture as it is drawn, travel
     to the next (a hop on a long trip), and pull back to the whole page before it turns. Pages take turns between
@@ -76,8 +116,11 @@ def auto_camera(page, assets, width, height, index=0):
     vertical = height > width
     keys, length = [], page['end'] - page['start']
     style = HOLDS[index % len(HOLDS)]
+    texts = [(event['start'], box(event, assets[event['asset']])) for event in page['events']
+             if not event['caption'] and event.get('role') == 'text']
     for number, segment in enumerate(segments):
         center, zoom = frame_for(segment['boxes'], width, height, vertical)
+        center, zoom = keep_titles_whole(center, zoom, segment, texts, width, height, vertical)
         center = [round(value, 1) for value in center]
         if number == 0:
             keys.append({'at': 0., 'center': center, 'zoom': round(zoom, 3), 'move': 'cut'})
@@ -92,7 +135,9 @@ def auto_camera(page, assets, width, height, index=0):
             keys.append({'at': round(at, 3), 'center': center, 'zoom': round(zoom, 3), 'move': move,
                          **({'seconds': .9} if move == 'pan' else {})})
         drawn = segment['end'] - segment['start']
-        if style == 'drift' and zoom > 1.04 and drawn > 1.5:
+        wide = max(1., zoom * .92)
+        sliced = any(start < segment['start'] and cut_through(view_rect(center, wide, width, height), area) for start, area in texts)
+        if style == 'drift' and zoom > 1.04 and drawn > 1.5 and not sliced:
             # Settle a little wide of the picture and ease in while it is drawn.
             keys[-1]['zoom'] = round(max(1., zoom * .92), 3)
             keys.append({'at': round(keys[-1]['at'] + (keys[-1].get('seconds', 1.) if number else 0) + .05, 3), 'center': center,

@@ -1,10 +1,12 @@
 # 声音与收尾硬约束
 
-## 写字有笔声，画画静音；配乐默认关闭
+## 写字有笔声，画画静音，转场有音效；配乐默认关闭
 
-生产混音默认是完整旁白加一层程序合成的写字笔声（只在手写文字时发声，描线和上色静音——用户试听后认为画画时持续的沙沙声刺耳、累耳）；代码不自行添加背景音乐，旧 music.wav 即使存在也不会使用。所有声音都由本仓代码合成，不下载、不采样、不引用他人旋律。
+生产混音默认是完整旁白加一层程序合成的写字笔声和一层转场音效（只在手写文字时发声，描线和上色静音——用户试听后认为画画时持续的沙沙声刺耳、累耳）；代码不自行添加背景音乐，旧 music.wav 即使存在也不会使用。所有声音都由本仓代码合成，不下载、不采样、不引用他人旋律。
 
 笔声（`scripts/foley.py`）在时间线生成后按每个非字幕事件的笔段逐毫秒合成，与笔尖同步：ink/sketch 是笔尖擦纸的沙沙声（带通噪声，笔速越快越亮越响；纸纹颗粒沿笔迹读取，颗粒快慢随笔速；落笔有极轻的触纸声），手写字同一笔尖、频带略低、颗粒更细，听起来是柔和的铅笔擦纸声，整层再经 5.2 kHz 低通去掉刺耳的高频嘶声，color/shade/brush 是更低更宽的马克笔涂抹声，之字形折返处随笔速减弱形成节奏；travel/pause 抬笔段静音。声像随笔尖 x 位置轻微偏左右；旁白说话时压低 4 dB（40 ms 压下、300 ms 回弹）。电平是绝对值，不按片子归一：参考笔画单声道约 -34 dBFS，软上限 -24 dBFS；实测天涯样片全片笔声约 -37 LUFS，比旁白低约 20 LU。音色按手部预设选择（马克笔、中性笔/钢笔、彩铅、毛笔）。`audio.foley` 省略或 true 即默认（`scope: "writing"`，只有写字发声）；`{"scope": "all"}` 让描线和上色也发声；false 或 `{"enabled":false}` 关闭；可设 `gain_db`（-18…6）、`duck_db`（0…12）、`tool`（auto/marker/pen/pencil/brush）、`seed`、`stereo`。结果写入 `work/audio/foley.wav` 与 `foley-report.json`，以 `kind:"foley"`（gain 0.25）层进入 `audio_policy.layers`。
+
+转场和点睛音效（`scripts/sfx.py`）默认开启：翻页、撕纸是纸声，甩镜、穿越是风声，墨晕、光圈是起伏声，板擦和橡皮擦是摩擦声，马克笔和毛刷是刷过的声音，`burst` 粒子一声轻铃，slam 大字和镜头 `slam` 一声闷响。全部由噪声、滤波和正弦分音在代码里合成，按渲染器的转场窗口逐采样对齐；峰值约 -26 dBFS，6 kHz 低通，旁白说话时再压低 6 dB，样片实测约 -43 LUFS。`audio.sfx` 省略或 true 即开启；false 或 `{"enabled": false}` 关闭；可设 `gain_db`（-18…6）、`transitions`、`accents`（各自开关）和整数 `seed`。结果写入 `work/audio/sfx.wav` 与 `sfx-report.json`，以 `kind:"sfx"` 层进入 `audio_policy.layers`。这层只是转场的声音，不是配乐，也不算 `sound_effects`。
 
 audio.music 省略或 false；只有用户本次明确要求并提供 user_instruction 与 source 时可加入。每个 audio.sound_effects 项必须有 source、start、gain、beat_id、reason，说明必要的剧情作用；不能用循环音效变相铺音乐。素材变动会使构建指纹失效。
 

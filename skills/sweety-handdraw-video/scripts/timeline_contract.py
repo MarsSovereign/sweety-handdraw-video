@@ -13,7 +13,7 @@ TRANSITION_SECONDS = {'erase': (.6, 2.), 'page_turn': (.6, 1.8), 'marker_wipe': 
 TRANSITION_STYLES = {'erase': ('felt', 'rubber'), 'iris': ('round', 'blot')}
 WIPE_DIRECTIONS = ('left', 'right', 'up', 'down')
 MAX_ZOOM = 3.
-CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow', 'rotate', 'shake', 'move', 'impact', 'hop'}
+CAMERA_FIELDS = {'at', 'center', 'zoom', 'ease', 'seconds', 'follow', 'rotate', 'shake', 'move', 'impact', 'hop', 'subject'}
 
 
 def number(value):
@@ -33,7 +33,7 @@ def validate_page_motion(page, canvas, first=False):
                 raise ValueError('Camera keyframes accept only ' + '/'.join(sorted(CAMERA_FIELDS)))
             if 'move' in key and key['move'] not in CAMERA_MOVES:
                 raise ValueError('Camera move is one of ' + ', '.join(CAMERA_MOVES))
-            key = camera_key(key)
+            move, key = key.get('move'), camera_key(key)
             if not number(key.get('impact', 0)) or not 0 <= key.get('impact', 0) <= 40 or not number(key.get('hop', 0)) or not 0 <= key.get('hop', 0) <= .6:
                 raise ValueError('Camera impact is within 0..40 px and hop within 0..0.6')
             at = key.get('at', 0)
@@ -55,6 +55,15 @@ def validate_page_motion(page, canvas, first=False):
                 raise ValueError('Camera rotate is within -20..20 degrees and shake within 0..20 px')
             if not number(key.get('seconds', .8)) or not 0 <= key.get('seconds', .8) <= 3:
                 raise ValueError('Camera move seconds must be within 0..3')
+            subject = key.get('subject')
+            if move == 'dolly_zoom' and not subject:
+                raise ValueError('A dolly_zoom camera key needs "subject": the visual id that keeps its size while the page zooms')
+            if subject is not None:
+                visuals = {event.get('visual') for event in page.get('events', ()) if not event.get('caption')}
+                if not isinstance(subject, str) or (page.get('events') and subject not in visuals):
+                    raise ValueError(f'Camera subject {subject!r} must be the visual id of an element drawn on this page')
+                if at == 0:
+                    raise ValueError('A dolly zoom (camera subject) starts after the page opens: give it "at" > 0')
     if transition is not None:
         if first:
             raise ValueError('pages[].transition describes the move into a page; the first page has none')

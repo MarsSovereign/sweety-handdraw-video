@@ -19,6 +19,8 @@ BLUR_PX = 18.
 TRANSITION_EFFECTS = ('wipe', 'zoom', 'erase', 'page_turn', 'slide_over', 'marker_wipe', 'ink_bleed', 'iris', 'card_flip', 'zoom_through', 'whip', 'push',
                       'paper_tear', 'brush_reveal', 'cube', 'shards', 'tiles', 'flash')  # camera travel per frame (screen px) above which a frame is exposed three times and blended
 STAY_SECONDS = 1.  # shorter pen-up gaps keep the hand in frame
+GESTURE_LIFT = 7.  # px the nib hovers above the paper while it points at an overlay
+ZOOM_PARALLAX = .5  # a push-in spreads a layer at depth 1 by zoom**0.5 more than the page (its position, not its size)
 MAX_TILT = 7  # degrees of wrist turn
 SHADOW_OPACITY = .16
 SHADOW_DIRECTION = np.array([.555, .832])  # shadows fall down and to the right (light from the upper left)
@@ -153,6 +155,14 @@ class Renderer:
         return image
 
     def event_state(self,event,progress):
+        if event.get('gesture'):
+            # Glide along the gesture path, nib hovering just above the paper (it points, it does not ink).
+            points=np.asarray(event['points'],float)
+            if len(points)<2:
+                return points[0],GESTURE_LIFT
+            arc=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(points,axis=0),axis=1))]
+            along=float(distance_fraction(float(np.clip(progress,0,1)),'minjerk'))*arc[-1]
+            return np.array([np.interp(along,arc,points[:,0]),np.interp(along,arc,points[:,1])]),GESTURE_LIFT
         cache=self.__dict__.setdefault('segment_starts',{})
         metadata=self.timeline['assets'][event['asset']]
         if event['asset'] not in cache:
@@ -160,7 +170,12 @@ class Renderer:
         point,lift=asset_tip(metadata,progress,cache[event['asset']])
         # Screen units: an asset of a zoomed page is drawn at its board resolution (event scale).
         scale=float(event.get('scale',1.))
-        return np.array([event['x'],event['y']])+point/scale,lift/scale
+        point=np.array([event['x'],event['y']])+point/scale
+        page=self.warp_pages().get(id(event)) if event.get('depth') or event.get('visual') else None
+        if page is not None:
+            shift,factor,pivot=self.warp(event,page,event['start']+float(np.clip(progress,0,1))*(event['end']-event['start']))
+            point=pivot+(point-pivot)*factor+shift
+        return point,lift/scale
 
     def event_tip(self,event,progress):
         return self.event_state(event,progress)[0]
@@ -180,6 +195,9 @@ class Renderer:
         if 'pen_event_list' not in self.__dict__:
             events=[(event,index) for index,page in enumerate(self.timeline['pages']) for event in page.get('events',[])
                     if not event['caption'] and event.get('pen',True)]
+            # Pen gestures: the pen traces an overlay as it appears (no ink), so motion layers have a visible cause.
+            events+=[(dict(gesture,caption=False,gesture=True),index) for index,page in enumerate(self.timeline['pages'])
+                     for gesture in page.get('gestures',[])]
             self.pen_event_list=sorted(events,key=lambda item:item[0]['start'])
             self.pen_event_starts=[event['start'] for event,_ in self.pen_event_list]
         return self.pen_event_list
@@ -323,24 +341,38 @@ class Renderer:
         if index not in events:
             events[index]=sorted((event for event in page['events'] if not event['caption']),key=lambda event:(event['z'],event['start']))
         visible=[event for event in events[index] if event['start']<=time<event['hide']]
+        warped=self.warped(index)
+        flat=[event for event in visible if id(event) not in warped]
+        moving=sorted((event for event in visible if id(event) in warped),key=lambda event:(float(event.get('depth',0.)),event['z'],event['start']))
+        behind=any(float(event.get('depth',0.))<0 for event in warped.values())  # far layers go under the page's flat ink
         settled=0
-        while settled<len(visible) and time>=visible[settled]['end'] and not self.animated(visible[settled],time):
+        while settled<len(flat) and time>=flat[settled]['end'] and not self.animated(flat[settled],time):
             settled+=1
-        key=tuple(id(event) for event in visible[:settled])
+        key=tuple(id(event) for event in flat[:settled])
         cache=self.__dict__.setdefault('settled_cache',{})  # one base per page: a transition shows two pages at once
         if cache.get(index,(None,))[0]!=key:
-            base=Image.new('RGBA',self.board_size(index),self.paper)
-            background=getattr(self,'backgrounds',{}).get(index)  # renderers built by tests may skip __init__
-            if background is not None:
-                base.alpha_composite(background,(0,0))
-            for event in visible[:settled]:
+            base=Image.new('RGBA',self.board_size(index),(0,0,0,0) if behind else self.paper)
+            if not behind:
+                self.draw_ground(base,index)
+            for event in flat[:settled]:
                 base.alpha_composite(self.layer(event,time),self.anchor(event,scale))
             if len(cache)>4:
                 cache.clear()
             cache[index]=(key,base)
-        frame=cache[index][1].copy()
-        for event in visible[settled:]:
+        if behind:
+            frame=Image.new('RGBA',self.board_size(index),self.paper)
+            self.draw_ground(frame,index)
+            for event in moving:
+                if float(event.get('depth',0.))<0:
+                    self.place(frame,event,time,scale,index)
+            frame.alpha_composite(cache[index][1])
+        else:
+            frame=cache[index][1].copy()
+        for event in flat[settled:]:
             self.place(frame,event,time,scale)
+        for event in moving:
+            if float(event.get('depth',0.))>=0 or not behind:
+                self.place(frame,event,time,scale,index)
         self.draw_overlays(frame,index,time,'board',scale)
         if include_hand:
             self.draw_hand(frame,time,index,scale)
@@ -350,6 +382,55 @@ class Renderer:
             self.draw_overlays(frame,index,time,'screen')
             self.draw_captions(frame,index,time)
         return frame
+
+    def draw_ground(self,frame,index):
+        background=getattr(self,'backgrounds',{}).get(index)  # renderers built by tests may skip __init__
+        if background is not None:
+            frame.alpha_composite(background,(0,0))
+
+    def warped(self,index):
+        """{id: event} of the page's elements that move against its camera: a parallax depth, or the subject of a dolly zoom."""
+        cache=self.__dict__.setdefault('warped_cache',{})
+        if index not in cache:
+            page=self.timeline['pages'][index]
+            subjects={key['subject'] for key in page.get('camera') or () if key.get('subject')}
+            cache[index]={id(event):event for event in page.get('events',()) if page.get('camera') and not event['caption']
+                          and (float(event.get('depth',0.)) or event.get('visual') in subjects)}
+        return cache[index]
+
+    def warp_pages(self):
+        if 'warp_page_map' not in self.__dict__:
+            self.warp_page_map={key:index for index in range(len(self.timeline.get('pages',()))) for key in self.warped(index)}
+        return self.warp_page_map
+
+    def warp(self,event,index,time):
+        """(shift, factor, pivot) in screen units of an element that moves against the camera.
+        Parallax: a layer at depth d (-1 far .. 1 near) travels (1+d) times as far as the page when the camera pans away
+        from the page's opening view, and a push-in spreads near layers out from the frame centre. Dolly zoom: the subject is scaled by factor about its
+        centre (pivot) so it keeps its screen size while the camera zooms past it."""
+        center,zoom,_,subject,factor=self.camera_track(index,time,steady=True)
+        opening=self.__dict__.setdefault('opening_views',{})
+        if index not in opening:  # layers sit where the layout put them in the page's opening view
+            opening[index]=self.camera_track(index,self.timeline['pages'][index]['start'],steady=True)[:2]
+        start,start_zoom=opening[index]
+        if 'width' in event:  # a board overlay
+            size=np.array([event['width'],event['height']],float)
+        else:
+            metadata=self.timeline['assets'][event['asset']]
+            size=np.array([metadata['width'],metadata['height']],float)/float(event.get('scale',1.))
+        pivot=np.array([event['x'],event['y']],float)+size/2
+        depth=float(np.clip(event.get('depth',0.),-1,1))
+        shift=-depth*(center-start)+(pivot-center)*((zoom/start_zoom)**(ZOOM_PARALLAX*depth)-1)
+        return shift,(factor if subject is not None and event.get('visual')==subject else 1.),pivot
+
+    @staticmethod
+    def paste(frame,layer,corner):
+        """alpha_composite at any integer corner: whatever falls outside the frame is cut off."""
+        x,y=int(corner[0]),int(corner[1])
+        left,top=max(0,-x),max(0,-y)
+        right,bottom=min(layer.width,frame.width-x),min(layer.height,frame.height-y)
+        if right>left and bottom>top:
+            frame.alpha_composite(layer.crop((left,top,right,bottom)) if (left,top,right,bottom)!=(0,0,layer.width,layer.height) else layer,(x+left,y+top))
 
     def overlay_frame(self,overlay,time):
         """Current frame of a web motion layer (held on its last frame), with its exit applied; None when hidden."""
@@ -389,6 +470,11 @@ class Renderer:
             if padded:  # motion.apply pads the layer; centre it on the overlay box
                 x-=(image.width-round(overlay['width']*overlay['scale']))//2
                 y-=(image.height-round(overlay['height']*overlay['scale']))//2
+            if space=='board' and overlay.get('depth') and self.timeline['pages'][index].get('camera'):
+                shift,_,_=self.warp(overlay,index,time)
+                x,y=x+round(shift[0]*scale),y+round(shift[1]*scale)
+                self.paste(frame,image,(x,y))
+                continue
             frame.alpha_composite(image,(x,y))
 
     @staticmethod
@@ -422,8 +508,11 @@ class Renderer:
             cache[event['asset']]=motion.boil_variants(self.artwork[event['asset']],1.1*float(event.get('scale',1.)))
         return cache[event['asset']][variant]
 
-    def place(self,frame,event,time,scale):
+    def place(self,frame,event,time,scale,index=None):
+        """Composite one element at this time: its drawing progress, motions, and (given its page index) the parallax
+        shift or dolly-zoom scale of an element that moves against the camera."""
         layer=self.layer(event,time)
+        corner=np.array(self.anchor(event,scale),float)
         motions=event.get('motions') or [dict(effect,type=effect['type']) for effect in event.get('emphasis',())]
         if motions and time>=event['end']:
             import motion
@@ -439,10 +528,17 @@ class Renderer:
                     layer=self.boil(event,total.pop('boil'))
                 if not motion.is_identity(total):
                     layer,offset=motion.apply(layer,total,float(event.get('scale',1.)))
-                    x,y=self.anchor(event,scale)
-                    frame.alpha_composite(layer,(x+offset[0],y+offset[1]))
-                    return
-        frame.alpha_composite(layer,self.anchor(event,scale))
+                    corner=corner+np.asarray(offset,float)
+        if index is not None and id(event) in self.warped(index):
+            shift,factor,pivot=self.warp(event,index,time)
+            if abs(factor-1)>1e-3:
+                size=(max(1,round(layer.width*factor)),max(1,round(layer.height*factor)))
+                center=pivot*scale
+                corner=center+(corner-center)*np.array([size[0]/layer.width,size[1]/layer.height])
+                layer=layer.resize(size,Image.Resampling.LANCZOS if factor<1 else Image.Resampling.BICUBIC)
+            self.paste(frame,layer,np.rint(corner+shift*scale))
+            return
+        frame.alpha_composite(layer,tuple(int(value) for value in np.rint(corner)))
 
     def camera_keys(self,index):
         cache=self.__dict__.setdefault('camera_cache',{})
@@ -458,7 +554,7 @@ class Renderer:
                              'center':np.array(key.get('center',[self.width/2,self.height/2]),dtype=float),
                              'seconds':float(key.get('seconds',.8)),'ease':key.get('ease','inout'),'follow':bool(key.get('follow')),
                              'rotate':float(key.get('rotate',0)),'shake':float(key.get('shake',0)),
-                             'impact':float(key.get('impact',0)),'hop':float(key.get('hop',0))})
+                             'impact':float(key.get('impact',0)),'hop':float(key.get('hop',0)),'subject':key.get('subject')})
             cache[index]=sorted(keys,key=lambda key:key['at'])
         return cache[index]
 
@@ -472,16 +568,23 @@ class Renderer:
         """(centre, zoom, rotation degrees) of the page camera: a key at 0 s frames the page from its start, later keys
         glide in with their easing (any motion.ease name; inout = min-jerk). Zoom moves in log space (every doubling
         takes the same time); a hop dips the zoom mid-move; an impact shakes the frame on arrival."""
+        return self.camera_track(index,time)[:3]
+
+    def camera_track(self,index,time,steady=False):
+        """camera_state plus the dolly zoom: (centre, zoom, rotation, subject visual or None, subject scale factor).
+        steady leaves out pen following, hand-held drift and arrival shakes: the path parallax layers move against
+        (it never asks where the pen is, so a pen drawing on a parallax layer can follow it)."""
         import motion
         page=self.timeline['pages'][index]
         local=time-page['start']
-        center,zoom,rotate,shake=np.array([self.width/2,self.height/2]),1.,0.,float(page.get('handheld',0.))
+        center,zoom,rotate,shake=np.array([self.width/2,self.height/2]),1.,0.,0. if steady else float(page.get('handheld',0.))
+        subject,factor=None,1.
         jolt=np.zeros(3)
         for key in self.camera_keys(index):
             if local<key['at']:
                 break
             target=key['center']
-            if key['follow']:
+            if key['follow'] and not steady:
                 tips=[tip[0] for tip in (self.sampled_tip(time+.15*step) for step in range(-4,3))
                       if tip is not None and tip[1]==index and 0<=tip[0][1]<=self.height]
                 target=target+.5*(np.mean(tips,axis=0)-target) if tips else target
@@ -490,10 +593,17 @@ class Renderer:
             moved=zoom*(key['zoom']/zoom)**weight
             if key['hop'] and 0<fraction<1:
                 moved=max(1.,moved/(1+key['hop']*4*fraction*(1-fraction)))
+            if key['subject']:
+                # The subject keeps the screen size it had when this key began; a later key eases it back.
+                factor=(factor if subject==key['subject'] else 1.)*zoom/moved
+                subject=key['subject']
+            elif subject is not None:
+                factor=factor**(1-weight)
             center,zoom,rotate=center+weight*(target-center),moved,rotate+weight*(key['rotate']-rotate)
-            shake=key['shake'] or shake
-            if key['impact']:
-                jolt=np.array(motion.impact_shake(key['impact'],local-key['at']-key['seconds']))
+            if not steady:
+                shake=key['shake'] or shake
+                if key['impact']:
+                    jolt=np.array(motion.impact_shake(key['impact'],local-key['at']-key['seconds']))
         if shake:
             # Hand-held drift: two incommensurate slow sines per axis, a few pixels, never a jitter.
             center=center+shake*np.array([math.sin(1.3*time)+.5*math.sin(3.7*time+1),math.sin(1.1*time+2)+.5*math.sin(2.9*time)])/1.5
@@ -501,7 +611,7 @@ class Renderer:
             # A shake needs room to move: zoom in just enough that the frame never shows past the board.
             zoom=max(zoom,1+2.2*float(np.abs(jolt[:2]).max())/min(self.width,self.height))
             center=self.clamp_view(center,zoom)+jolt[:2]/zoom
-        return self.clamp_view(center,zoom),zoom,rotate+jolt[2]
+        return self.clamp_view(center,zoom),zoom,rotate+jolt[2],subject,factor
 
     def camera(self,index,time):
         """Camera centre and zoom (see camera_state for rotation)."""

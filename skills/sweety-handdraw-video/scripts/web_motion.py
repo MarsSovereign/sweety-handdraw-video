@@ -2,8 +2,8 @@
 """Web motion layers: render an HTML/JS motion recipe to a transparent frame sequence in headless Chromium.
 
 Recipes live in assets/web-motion/recipes.js and use bundled open-source libraries (anime.js, rough.js,
-rough-notation, canvas-confetti, d3-geo and d3-array, topojson-client and world-atlas land outlines; licences in assets/web-motion/vendor
-and assets/web-motion/THIRD_PARTY_NOTICES.md). The page runs on a virtual clock
+rough-notation, canvas-confetti, d3-geo and d3-array, topojson-client and world-atlas land outlines; matter-js, Zdog and MathJax
+load only for the recipes that need them; licences in assets/web-motion/vendor and assets/web-motion/THIRD_PARTY_NOTICES.md). The page runs on a virtual clock
 (assets/web-motion/shim.js), so every frame is exact and repeatable however slow the capture is; renders are cached
 by content hash. Requires the optional `playwright` package and its Chromium (scripts/setup.sh --web-motion).
 
@@ -19,8 +19,17 @@ PACKAGE = Path(__file__).resolve().parents[1]
 ASSETS = PACKAGE / 'assets' / 'web-motion'
 LIBRARIES = ('vendor/anime.js', 'vendor/rough.js', 'vendor/rough-notation.js', 'vendor/confetti.js', 'vendor/d3-array.js', 'vendor/d3-geo.js', 'vendor/topojson.js',
              'vendor/land-110m.js', 'recipes.js')
+# Heavier libraries load only for the recipe that uses them (MathJax alone is 2 MB).
+RECIPE_LIBRARIES = {'physics': ('vendor/matter.js',), 'spin3d': ('vendor/zdog.js',), 'formula': ('vendor/mathjax-tex-svg.js',)}
 RECIPES = ('kinetic_title', 'rough_annotate', 'sketch_shapes', 'burst', 'number_ticker', 'callout', 'progress_ring', 'morph', 'rough_chart',
-           'map_route', 'custom')
+           'map_route', 'physics', 'spin3d', 'formula', 'custom')
+# MathJax: typeset on request only, no menu, no file loads (the bundle already holds every TeX extension), self-contained SVG paths.
+MATHJAX_CONFIG = ('window.MathJax={loader:{load:[]},startup:{typeset:false},options:{enableMenu:false},'
+                  'svg:{fontCache:"none"},tex:{packages:{"[+]":["color","cancel","boldsymbol"]}}};')
+
+
+def libraries(recipe):
+    return LIBRARIES[:-1] + RECIPE_LIBRARIES.get(recipe, ()) + LIBRARIES[-1:]
 VERSION = 'web-motion-2'
 
 
@@ -40,14 +49,15 @@ def available():
 
 def fingerprint(recipe, params, width, height, scale, fps, frames, seed):
     digest = hashlib.sha256(VERSION.encode())
-    for name in ('shim.js',) + LIBRARIES:
+    for name in ('shim.js',) + libraries(recipe):
         digest.update((ASSETS / name).read_bytes())
     digest.update(json.dumps([recipe, params, width, height, scale, fps, frames, seed], sort_keys=True, ensure_ascii=False).encode())
     return digest.hexdigest()[:20]
 
 
 def page_html(recipe, params, width, height, scale, seconds, seed):
-    scripts = ''.join(f'<script src="{(ASSETS / name).as_uri()}"></script>' for name in LIBRARIES)
+    scripts = (f'<script>{MATHJAX_CONFIG}</script>' if recipe == 'formula' else '') + ''.join(
+        f'<script src="{(ASSETS / name).as_uri()}"></script>' for name in libraries(recipe))
     context = json.dumps({'width': width, 'height': height, 'scale': scale, 'duration': seconds * 1000})
     return (f'<!doctype html><html><head><meta charset="utf-8"><style>html,body{{margin:0;background:transparent;overflow:hidden}}'
             f'#root{{position:absolute;left:0;top:0;width:{width}px;height:{height}px}}</style>{scripts}</head><body><div id="root"></div>'

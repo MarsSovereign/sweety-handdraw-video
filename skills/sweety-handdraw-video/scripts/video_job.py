@@ -12,6 +12,7 @@ import wave
 import numpy as np
 from PIL import Image
 import stroke_assets
+import line_drawing
 from hand_assets import prepare_hand
 from art_direction import verify_art_direction
 from caption_assets import build_caption, caption_position, caption_safe_violations, resolve_cues
@@ -214,6 +215,64 @@ def expand_actions(specs):
     return result
 
 
+GESTURE_RECIPES = ('rough_annotate', 'sketch_shapes', 'rough_chart', 'callout', 'number_ticker', 'progress_ring', 'kinetic_title', 'morph',
+                   'map_route', 'burst', 'formula', 'physics', 'spin3d')
+
+
+def gesture_path(spec, event):
+    """Screen points the pen traces, without ink, when a board-space overlay appears: around a circled thing, under a
+    chart or a title, a small loop at a number. The overlay is the pen's doing instead of appearing on its own."""
+    x, y, width, height = event['x'], event['y'], event['width'], event['height']
+    params, recipe = spec.get('params', {}), spec['recipe']
+    cx, cy = x + width / 2, y + height / 2
+    loop = lambda rx, ry, turns=1.: [[cx + rx * math.cos(-math.pi / 2 + 2 * math.pi * turns * k / 24), cy + ry * math.sin(-math.pi / 2 + 2 * math.pi * turns * k / 24)]
+                                     for k in range(25)]
+    if recipe == 'rough_annotate':
+        kind = params.get('type', 'circle')
+        if kind in ('underline', 'strike-through', 'crossed-off', 'highlight'):
+            level = y + height * (.88 if kind == 'underline' else .5)
+            return [[x + .08 * width, level], [x + .92 * width, level]]
+        if kind in ('box', 'bracket'):
+            return [[x + .1 * width, y + .1 * height], [x + .9 * width, y + .1 * height], [x + .9 * width, y + .9 * height],
+                    [x + .1 * width, y + .9 * height], [x + .1 * width, y + .12 * height]]
+        return loop(.42 * width, .42 * height)
+    if recipe == 'sketch_shapes' and params.get('shapes'):
+        shape = params['shapes'][0]
+        if shape.get('points'):
+            return [[x + point[0], y + point[1]] for point in shape['points']]
+        left, top, right, bottom = shape.get('box', [0, 0, width, height])
+        return [[x + left, y + top], [x + right, y + top], [x + right, y + bottom], [x + left, y + bottom]]
+    if recipe in ('rough_chart', 'kinetic_title'):
+        level = y + height * (.9 if recipe == 'rough_chart' else .78)
+        return [[x + .1 * width, level], [x + .9 * width, level]]
+    if recipe == 'formula':  # writing along the line: one small up-and-down per glyph, left to right
+        count = max(2, formula_glyphs(params.get('tex', '')))
+        return [[x + width * (.1 + .8 * k / (3 * count)), cy + .07 * height * math.sin(math.pi * k / 1.5)] for k in range(3 * count + 1)]
+    if recipe == 'spin3d':  # an orbit around the object, as if setting it turning
+        return loop(.36 * width, .12 * height)
+    if recipe == 'physics' and params.get('scene', 'pour') == 'pour':  # where the props pour in, then down into the container
+        return [[cx - .12 * width, y + .1 * height], [cx + .12 * width, y + .1 * height], [cx, y + .45 * height]]
+    return loop(.18 * min(width, height), .18 * min(width, height))
+
+
+def formula_glyphs(tex):
+    """About how many marks MathJax draws for a TeX string (a command is one mark; braces, scripts and spaces none)."""
+    return len(re.sub(r'[{}^_\s&]', '', re.sub(r'\\[A-Za-z]+', 'X', str(tex))))
+
+
+def gesture_seconds(spec, seconds):
+    """How long the pen traces an overlay: the time a formula takes to write (see recipes.js formula), else a short pass."""
+    if spec['recipe'] == 'formula':
+        params = spec.get('params', {})
+        count = max(1, formula_glyphs(params.get('tex', '')))
+        slot = params.get('glyph_ms') or float(np.clip((seconds * 1000 - params.get('delay', 0) - 500) / count, 90, 240))
+        return min(seconds, (params.get('delay', 0) + slot * (count + .5)) / 1000)
+    return float(np.clip(.6 * seconds, .5, 1.3))
+
+
+ENGINE_SHA256 = None
+
+
 def page_scale(page_spec):
     """Board resolution of a page: the largest camera zoom on it, so every close-up is a sharp crop (1..3)."""
     zooms = [float(key.get('zoom', 1)) for key in page_spec.get('camera') or []]
@@ -234,6 +293,14 @@ def moment(spec, page, beats, default):
             raise ValueError(f'"at" names a sentence that is not on this page: {at}')
         return beats[beat_id]['start'] + float(spec.get('offset', .15))
     return page['start'] + float(at)
+
+
+def parallax_depth(spec):
+    """An element's parallax depth: -1 (far, moves with the camera) .. 1 (near, moves twice as far as the page)."""
+    depth = spec.get('depth')
+    if isinstance(depth, bool) or not isinstance(depth, (int, float)) or not -1 <= depth <= 1:
+        raise ValueError('Parallax "depth" is a number within -1 (far) .. 1 (near); 0 or absent is the page itself')
+    return float(depth)
 
 
 def resolve_motions(spec, event, page, beats, parts=()):
@@ -337,7 +404,58 @@ class FilmBuilder:
         anchors = [anchor_point(spec) for spec in (first, second)]
         return float(np.clip(np.linalg.norm(anchors[1] - anchors[0]) / 1600, max(minimum, .12), .45))
 
+    # Fields that only place or time an action on the page; they do not change the asset that is built.
+    PLACEMENT_KEYS = ('x', 'y', 'visual', 'weight', 'from_beat', 'z', 'motion', 'emphasis', 'pen', 'depth')
+
+    def asset_key(self, action, seconds, scale):
+        """Content key of one built element: the action without its placement, its window, board scale, the bytes of
+        every input file it reads, the font and the engine code. Same key, same pixels and time maps."""
+        global ENGINE_SHA256
+        if ENGINE_SHA256 is None:
+            digest = hashlib.sha256()
+            for path in sorted(Path(__file__).resolve().parent.glob('*.py')):
+                if not path.name.startswith('test_'):
+                    digest.update(path.name.encode() + path.read_bytes())
+            ENGINE_SHA256 = digest.hexdigest()
+        files = {}
+        for key in ('source', 'outline_mask', 'region_map'):
+            if action.get(key):
+                path = resolve_input(self.root, action[key])
+                files[key] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        spec = {key: value for key, value in action.items() if key not in self.PLACEMENT_KEYS}
+        if action['type'] in ('line', 'arrow'):
+            spec['offset'] = [action.get('x'), action.get('y')]  # a line's points are absolute: they are its shape
+        payload = {'spec': spec, 'seconds': None if seconds is None else round(float(seconds), 4), 'scale': round(float(scale), 4),
+                   'files': files, 'drawing': self.manifest.get('drawing', {}), 'font': [str(self.font_path), self.font_index],
+                   'fps': self.fps, 'engine': ENGINE_SHA256}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:24]
+
     def create_asset(self, action, seconds=None, scale=1.):
+        """Build one element, or reuse an identical build from work/asset-cache: changing a camera move, an overlay or a
+        transition rebuilds nothing. Returns the page event."""
+        key = self.asset_key(action, seconds, scale)
+        cache = self.work / 'asset-cache' / key
+        name = f'element-{self.next_asset + 1:04d}'
+        directory = self.work / 'assets'
+        if (cache / 'asset.json').is_file():
+            self.next_asset += 1
+            for path in cache.iterdir():
+                if path.name != 'asset.json':
+                    shutil.copyfile(path, directory / path.name.replace('ASSET', name))
+            metadata = json.loads((cache / 'asset.json').read_text())
+            metadata['name'] = name
+            (directory / f'{name}.json').write_text(json.dumps(metadata))
+            self.cache_hits = getattr(self, 'cache_hits', 0) + 1
+            return self.place_asset(action, metadata, name, scale)
+        event = self.build_asset(action, seconds, scale)
+        cache.mkdir(parents=True, exist_ok=True)
+        for path in list(directory.glob(f'{name}.*')) + list(directory.glob(f'{name}-*.png')):
+            if path.suffix != '.json':
+                shutil.copyfile(path, cache / path.name.replace(name, 'ASSET'))
+        (cache / 'asset.json').write_text(json.dumps(self.assets[name]))
+        return event
+
+    def build_asset(self, action, seconds=None, scale=1.):
         """Build one element at its page's board resolution (scale > 1 when the camera zooms into the page);
         positions stay in screen units."""
         self.next_asset += 1
@@ -360,26 +478,37 @@ class FilmBuilder:
             drawing = {**self.manifest.get('drawing', {}), **action.get('drawing', {})}
             if drawing.get('mode') == 'reveal' and self.art_direction.get('style', {}).get('drawing_mode') == 'draw':
                 raise ValueError(f'{action["source"]}: this film is drawn; one picture cannot switch to reveal. Simplify or regenerate it so it can be drawn')
-            # Plan strokes and timing at the layout size; render the pixels at the page's board resolution.
-            metadata = stroke_assets.build_illustration(name, source, int(action['width']), int(action['height']),
+            # Plan strokes and timing at the layout size (capped at the plan side, so a big picture is not more lines to
+            # draw); render the pixels at the full size on the page's board resolution.
+            plan_width, plan_height, enlarge = line_drawing.plan_box(int(action['width']), int(action['height']), drawing)
+            metadata = stroke_assets.build_illustration(name, source, plan_width, plan_height,
                 action.get('crop'), action.get('parts'), optional('outline_mask'), seconds=seconds, region_map_path=optional('region_map'),
                 part_regions=action.get('part_regions'), lineart_exception=action.get('lineart_exception'), drawing=drawing)
-            if scale > 1.001:
-                metadata = stroke_assets.render_at(name, source, scale, action.get('crop'), None if drawing.get('mode') == 'reveal' else optional('outline_mask'))
+            if scale * enlarge > 1.001:
+                metadata = stroke_assets.render_at(name, source, scale * enlarge, action.get('crop'),
+                                                   None if drawing.get('mode') == 'reveal' else optional('outline_mask'))
         elif kind in ('line', 'arrow'):
             points = np.asarray(action['points'], float)
             if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
                 raise ValueError('A line needs "points": [[x, y], [x, y], ...] in screen pixels')
             metadata = stroke_assets.build_line(name, points * scale, float(action.get('line_width', 5)) * scale, action.get('color', '#302C26'),
-                                                action.get('head', 'end' if kind == 'arrow' else 'none'), float(action.get('curve', 0)))
-            x, y = metadata['offset'][0] / scale, metadata['offset'][1] / scale
+                                                action.get('head', 'end' if kind == 'arrow' else 'none'), float(action.get('curve', 0)),
+                                                float(action.get('pressure', stroke_assets.PRESSURE)))
         elif kind == 'counter':
             metadata = stroke_assets.build_counter(name, action.get('from', 0), action['to'], self.font_path, round(int(action.get('size', 72)) * scale),
                                                    action.get('color', '#302C26'), action.get('decimals', 0), action.get('prefix', ''), action.get('suffix', ''),
                                                    self.font_index)
         else:
             raise ValueError(f'Unsupported action type: {kind}')
+        return self.place_asset(action, metadata, name, scale)
+
+    def place_asset(self, action, metadata, name, scale):
+        """The page event of a built element: its board position, weight and layer."""
+        kind = action['type']
         self.assets[name] = metadata
+        x, y = action.get('x'), action.get('y')
+        if kind in ('line', 'arrow'):
+            x, y = metadata['offset'][0] / scale, metadata['offset'][1] / scale
         x, y = float(x), float(y)
         if kind not in ('line', 'arrow'):
             x, y = int(x), int(y)
@@ -418,7 +547,16 @@ class FilmBuilder:
                                  'for content meant to run off the edge')
             event = {'recipe': spec['recipe'], 'space': space, 'x': x, 'y': y, 'width': width, 'height': height, 'scale': board,
                      'start': round(start, 3), 'end': round(start + seconds, 3), 'frames': render['directory'], 'count': render['frames'],
-                     'z': int(spec.get('z', 60))}
+                     'z': int(spec.get('z', 60)), **({'visual': spec['visual']} if spec.get('visual') else {})}
+            if spec.get('depth'):
+                if space != 'board':
+                    raise ValueError('Only board overlays move with the camera, so only they take a parallax "depth"')
+                event['depth'] = parallax_depth(spec)
+            params = spec.get('params', {})
+            if spec['recipe'] == 'burst':
+                event['sound'] = 'chime'
+            elif spec['recipe'] == 'kinetic_title' and params.get('style') == 'slam':
+                event['sound'] = 'thump'
             if spec.get('exit'):
                 exit_spec = spec['exit']
                 exit_start = moment(exit_spec, page, beats, page['end'] - .5)
@@ -426,6 +564,9 @@ class FilmBuilder:
                                  'end': round(exit_start + float(exit_spec.get('seconds', .35)), 3)}
             if event['end'] > page['end'] + 1e-6 or event['start'] < page['start'] - 1e-6:
                 raise ValueError(f'Overlay {spec["recipe"]} must play within its page ({page["start"]:.2f}-{page["end"]:.2f}s)')
+            if space == 'board' and spec['recipe'] in GESTURE_RECIPES and spec.get('pen', True):
+                event['gesture'] = [[round(value, 1) for value in point] for point in gesture_path(spec, event)]
+                event['gesture_seconds'] = gesture_seconds(spec, seconds)
             events.append(event)
         return events
 
@@ -563,6 +704,8 @@ class FilmBuilder:
                     action = self.create_asset(spec, seconds, scale)
                     seconds = min(seconds, drawn_seconds(self.assets[action['asset']], seconds))
                     action.update(start=start, end=start + seconds, caption=False, visual=spec.get('visual'))
+                    if spec.get('depth'):
+                        action['depth'] = parallax_depth(spec)
                     if spec['type'] == 'illustration':
                         action['image'] = [spec['source'], spec.get('crop')]
                     parts = [part['id'] for part in self.assets[action['asset']].get('parts', [])]
@@ -616,6 +759,18 @@ class FilmBuilder:
             overlays = self.overlay_events(page_spec, page, scale)
             if overlays:
                 page['overlays'] = overlays
+                gestures, busy = [], [(event['start'], event['end']) for event in page['events'] if not event['caption'] and event.get('pen', True)]
+                for overlay in overlays:
+                    path = overlay.pop('gesture', None)
+                    if not path:
+                        continue
+                    start = overlay['start']
+                    end = min(overlay['end'], start + overlay.pop('gesture_seconds'), page['end'] - .2)
+                    free = all(end + .25 <= first or start - .25 >= last for first, last in busy + [(g['start'], g['end']) for g in gestures])
+                    if end - start >= .3 and free:
+                        gestures.append({'start': round(start, 3), 'end': round(end, 3), 'points': path, 'recipe': overlay['recipe']})
+                if gestures:
+                    page['gestures'] = gestures
             pages.append(page)
         ending = self.manifest.get('ending', {})
         fade = float(ending.get('fade_seconds', 0))
@@ -663,6 +818,9 @@ class FilmBuilder:
         # Pen and marker sounds follow the finished drawing schedule (audio.foley, on by default).
         from foley import attach as attach_foley
         attach_foley(self.root, timeline, self.manifest)
+        # Paper, eraser, whoosh and chime sounds for transitions and accents (audio.sfx, on by default, quiet).
+        from sfx import attach as attach_sfx
+        attach_sfx(self.root, timeline, self.manifest)
         cover = Image.open(resolve_input(self.root, self.manifest['cover']['source'])).convert('RGB')
         if abs(cover.width / cover.height - self.width / self.height) > .025:
             raise ValueError('Cover aspect ratio differs from canvas; generate or intentionally crop an appropriate cover')

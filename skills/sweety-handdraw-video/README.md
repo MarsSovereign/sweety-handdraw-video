@@ -1,6 +1,6 @@
 # sweety-handdraw-video
 
-安装一个 Skill，按主题或文章制作完整手绘讲解视频。当前版本：v2.0.0。
+安装一个 Skill，按主题或文章制作完整手绘讲解视频。当前版本：v2.0.1。
 
 - 使用入口：[SKILL.md](SKILL.md)
 - 项目说明、安装与样片：[GitHub README](https://github.com/threerocks/sweety-handdraw-video)
@@ -11,14 +11,27 @@
 
 旁白以本地为主：已安装并明确配置的 VoxCPM2，或兼容的本机 VoiceStudio 服务；火山豆包、Gemini TTS 只在用户配置了自己的密钥并选择时使用；已核对的导出音频可以离线复用。音色目录与试听见[本地声音运行](references/local-runtime.md)。生成新图片还需宿主的图像工具（Claude Code 需接入生图工具 / MCP 或使用用户提供的插画）；Python、fontTools 与 FFmpeg 负责本地合成，图片隐私清理为纯 Python。支持 macOS 与 Linux，`scripts/setup.sh` 一次装好运行环境。内置的参考指南不需要另行安装为 Skills。
 
-### v2.0.0：像人一样上色，镜头、转场和动效成体系
+### v2.0.1：纵深、物理、三维、公式和声音，画大不再画慢
+
+- **新能力**：视差 `depth` 与希区柯克变焦 `move: dolly_zoom`；`physics`（matter-js：倒入、多米诺、撞塌、弹跳）；`spin3d`（Zdog：盒子、硬币、易拉罐、宝石等，墨线外轮廓）；`formula`（MathJax：逐字描轮廓再填实，可圈出一部分）；直线和箭头有笔压；转场和点睛处有合成音效（`audio.sfx`）。
+- **修复 2.0.0 的 9 个问题**：
+  - 笔画和时长在不超过 720 px 的规划尺寸上计算，大图按显示尺寸清晰渲染；
+  - `image_gate.py` 生图后几秒内查出透明窟窿、光晕和超时，并给出提示词修改；
+  - 部位可写方框，`part_grid.py` 给出网格和色块编号；
+  - 动效出现时笔尖先描一遍，大字默认手写体，进度圆环改为手绘；
+  - 故事板检查认得写了 `visual` 的动效层；
+  - 改镜头、转场或动效层时素材从缓存复用；
+  - 自动镜头不再切掉已写好的标题。
+- 详见 [v2.0.1 发布记录](https://github.com/threerocks/sweety-handdraw-video/blob/main/docs/releases/v2.0.1.md)。更新后读取本目录 `VERSION`，应为 `2.0.1`。
+
+### v2.0.0：像人一样上色，镜头、转场和动效成体系（随 v2.0.1 首次公开）
 
 - **上色 v4**：上色跟着画面自己的闭合区域走，模型画的部件方框不再把一块颜色切成矩形（6 张测试图被切开的颜色面积 28–87% → 0–0.9%）；先沿内侧描边，再斜向排笔，刚涂上的是带毡头纹理的湿笔触，随后干透；窗口紧时退回最快的涂法，最短时长不增加。
 - **镜头 v3**：命名运镜 `move`（cut / push_in / pull_out / pan / drift / hop / whip / snap / slam），对数缩放，`hop` 途中拉远，`impact` 到位震动；自动镜头每页轮换静止、慢推、跟随笔尖；build 按密度规则提示镜头过度。
 - **转场 22 种**：翻页四个方向、撕纸、毛刷刷出、墨晕、墨渍光圈、橡皮擦、立方体、拼砖、碎片、闪白等；章节自动用翻页、板擦、撕纸做招牌。
 - **网页动效层**：`kinetic_title` 新增 slam、scramble、word_by_word；新配方 `morph`（形状接力）、`rough_chart`（柱、线、饼、点阵、正字计数、时间线）、`map_route`（转动地球或平面地图上的航线，只画海岸线）。需要 `setup.sh --web-motion`。
 - **给模型的卡组**：[运镜、转场与动效目录](references/motion-catalog.md)，每张卡写明适合与不适合，附拒绝清单和常用组合。
-- **许可**：花叔仓库里不在 MIT 授权内的角色帧不再随包分发；第三方库许可见 `assets/web-motion/THIRD_PARTY_NOTICES.md`。更新后读取本目录 `VERSION`，应为 `2.0.0`。
+- **许可**：花叔仓库里不在 MIT 授权内的角色帧不再随包分发；第三方库许可见 `assets/web-motion/THIRD_PARTY_NOTICES.md`。
 
 ### v1.5.0：有条理的干净线稿、更大的图、像样的声音和镜头
 

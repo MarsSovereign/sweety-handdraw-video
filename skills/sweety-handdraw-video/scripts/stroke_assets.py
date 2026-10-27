@@ -256,9 +256,52 @@ def line_points(points, curve=0.):
     return np.vstack([np.linspace(a, b, max(2, int(np.linalg.norm(b - a) / 2) + 1))[:-1] for a, b in zip(points[:-1], points[1:])] + [points[-1:]])
 
 
-def build_line(name, points, width=5, color='#302C26', head='none', curve=0.):
+PRESSURE = .6   # default pen pressure variation of lines and arrows (0 = an even technical-pen line)
+
+
+def pressure_widths(path, width, pressure=PRESSURE, flick=False):
+    """Nib width along a stroke as a hand presses it: the nib lands and swells over the first few px, thins a little
+    where the hand moves fastest (a minimum-jerk speed peak mid-stroke) and lifts off in a longer taper at the end.
+    A flick (an arrowhead barb) is short and quick: light at both ends, with no thinning. The body of a stroke keeps
+    the given width; pressure 0 gives an even line."""
+    distances = lengths(path)
+    total = max(1., float(distances[-1]))
+    if pressure <= 0:
+        return np.full(len(path), float(width))
+    smooth = lambda value: value * value * (3 - 2 * value)
+    u = distances / total
+    land = smooth(np.clip(distances / max(2., min(10., .12 * total)), 0, 1))
+    lift = smooth(np.clip((total - distances) / max(3., min(26., .28 * total)), 0, 1))
+    if flick:
+        weight = (.5 + .5 * land) * (.6 + .4 * lift)
+    else:
+        speed = 16 * (u * (1 - u)) ** 2               # minimum-jerk speed profile, 1 at mid-stroke
+        weight = (.3 + .7 * land) * (.12 + .88 * lift) * (1 - .25 * speed) * (1 + .04 * np.sin(distances / 23. + len(path)))
+    weight = weight / max(1e-6, float(np.median(weight)))
+    return float(width) * ((1 - pressure) + pressure * weight)
+
+
+def ink_mask(strokes, widths, size):
+    """Anti-aliased coverage (0..255) of round-nib strokes whose width varies point by point."""
+    alpha = np.zeros((int(size[1]), int(size[0])), np.float32)
+    for stroke, width in zip(strokes, widths):
+        steps = np.maximum(1, np.ceil(np.linalg.norm(np.diff(stroke, axis=0), axis=1) / .6)).astype(int)
+        dense = np.vstack([np.linspace(a, b, n, endpoint=False) for a, b, n in zip(stroke[:-1], stroke[1:], steps)] + [stroke[-1:]])
+        radii = np.interp(lengths(dense), lengths(stroke), np.asarray(width, float) / 2)
+        for (x, y), r in zip(dense, radii):
+            left, right = int(max(0, x - r - 2)), int(min(alpha.shape[1], x + r + 3))
+            top, bottom = int(max(0, y - r - 2)), int(min(alpha.shape[0], y + r + 3))
+            if right <= left or bottom <= top:
+                continue
+            ys, xs = np.ogrid[top:bottom, left:right]
+            np.maximum(alpha[top:bottom, left:right], np.clip(r + .5 - np.hypot(xs - x, ys - y), 0, 1), out=alpha[top:bottom, left:right])
+    return (alpha * 255).round().astype(np.uint8)
+
+
+def build_line(name, points, width=5, color='#302C26', head='none', curve=0., pressure=PRESSURE):
     """A pen line or arrow drawn stroke by stroke: the shaft from its first point, then each arrowhead barb.
-    points are in the caller's coordinates; the asset is the bounding box, and the offset to place it is returned."""
+    points are in the caller's coordinates; the asset is the bounding box, and the offset to place it is returned.
+    pressure (0..1) is how much the nib width follows the hand (pressure_widths); 0 draws an even line."""
     if head not in ('none', 'end', 'both'):
         raise ValueError('Line head must be none, end or both')
     path = line_points(points, curve)
@@ -284,13 +327,8 @@ def build_line(name, points, width=5, color='#302C26', head='none', curve=0.):
     origin = np.floor(every.min(0)) - margin
     size = (np.ceil(every.max(0)) - origin + margin).astype(int)
     local = [stroke - origin for stroke in strokes]
-    image = Image.new('L', tuple(int(value) for value in size))
-    draw = ImageDraw.Draw(image)
-    for stroke in local:
-        draw.line([tuple(point) for point in stroke], fill=255, width=int(round(width)), joint='curve')
-        for end in (stroke[0], stroke[-1]):
-            draw.ellipse([end[0] - width / 2, end[1] - width / 2, end[0] + width / 2, end[1] + width / 2], fill=255)
-    alpha = np.array(image)
+    pressure = float(np.clip(pressure, 0, 1))
+    alpha = ink_mask(local, [pressure_widths(stroke, width, pressure, flick=index > 0) for index, stroke in enumerate(local)], size)
     paths = [line_topology.resample(stroke) for stroke in local]
     reveal, segments = time_paths(paths, alpha.shape)
     reveal[alpha == 0] = np.inf
@@ -424,6 +462,16 @@ def prepare_artwork(source_path, max_width, max_height, crop=None, outline_mask_
     return {'artwork':artwork,'pixels':pixels,'alpha':alpha,'outline':outline,'band':band,'support':support}
 
 
+def box_polygon(box):
+    """A part given as a normalized box [left, top, right, bottom]: enough with 2.0's snapping, which hands every inked area
+    to the part that owns most of it, so a box need not trace the shape."""
+    if not (isinstance(box, (list, tuple)) and len(box) == 4 and all(isinstance(value, (int, float)) for value in box)
+            and 0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
+        raise ValueError('A part needs "polygon" or "box": [left, top, right, bottom] normalized to 0..1')
+    left, top, right, bottom = box
+    return [[left, top], [right, top], [right, bottom], [left, bottom]]
+
+
 def polygon_owners(parts, artwork, alpha):
     owners = np.full(alpha.shape, -1, dtype=np.int16)
     names = []
@@ -433,13 +481,13 @@ def polygon_owners(parts, artwork, alpha):
             raise ValueError('Every semantic part needs a unique id')
         names.append(part['id'])
         region = Image.new('L', artwork.size)
-        polygon = np.asarray(part['polygon'], dtype=float)
+        polygon = np.asarray(part['polygon'] if 'polygon' in part else box_polygon(part.get('box')), dtype=float)
         if len(polygon)<3 or not ((polygon>=0)&(polygon<=1)).all():
             raise ValueError('Part polygons must have >=3 normalized vertices')
         ImageDraw.Draw(region).polygon([tuple(point) for point in polygon * [artwork.width-1,artwork.height-1]],fill=255)
         mask = (np.array(region)>0)&(alpha>0)&(owners<0)
         # Preserve held objects and other occluding shapes for their own semantic part.
-        for excluded_polygon in part.get('exclude_polygons', []):
+        for excluded_polygon in part.get('exclude_polygons', []) + [box_polygon(box) for box in part.get('exclude_boxes', [])]:
             excluded_polygon = np.asarray(excluded_polygon, dtype=float)
             if len(excluded_polygon)<3 or not ((excluded_polygon>=0)&(excluded_polygon<=1)).all():
                 raise ValueError('Excluded polygons must have >=3 normalized vertices')
@@ -553,14 +601,12 @@ def source_ink(pixels, paint, clean, zone, strokes):
     return rgb, alpha, ink_time, ink_owner
 
 
-def snap_owners(owners, outline, pixels, alpha, part_count, colors=16):
-    """A model's part polygon is coarse (often a box) and cuts straight through a shape: coloring part by part then
-    paints a rectangle of a continuous area at a time. So each piece of one color inside an area the ink encloses goes
-    wholly to the part that owns most of it, and every other pixel (anti-aliasing, the paint under a line) follows the
-    nearest piece. This is the paint order only: strokes are still classified by the polygon owners."""
+def color_pieces(outline, pixels, alpha, colors=16):
+    """Pieces of one paint inside the areas the ink encloses: (piece label map, count, enclosed mask, solid flags). A piece
+    is solid when it is an area rather than a seam (holds a pixel 2.5 px from its edge, or is a whole enclosed shape)."""
     enclosed = (alpha > 0) & ~ndimage.binary_dilation(outline)
     if not enclosed.any():
-        return owners
+        return np.zeros(alpha.shape, np.int64), 0, enclosed, np.zeros(1, bool)
     palette_image = Image.fromarray(np.ascontiguousarray(pixels[:, :, :3])).quantize(colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
     quantized = np.array(palette_image)
     # Faint shading splits one flat colour into near-identical palette entries: those are one paint, not separate pieces.
@@ -576,9 +622,7 @@ def snap_owners(owners, outline, pixels, alpha, part_count, colors=16):
         labels, found = ndimage.label(enclosed & (quantized == value))
         pieces[labels > 0] = labels[labels > 0] + count
         count += found
-    inside = (pieces > 0) & (owners >= 0)
-    tally = np.bincount(pieces[inside] * part_count + owners[inside], minlength=(count + 1) * part_count).reshape(count + 1, part_count)
-    sizes = tally.sum(1)
+    sizes = np.bincount(pieces[enclosed], minlength=count + 1)
     # A piece is an area, not a seam: it must hold a pixel 2.5 px from its edge (a thin shading line follows its area).
     edge = np.zeros(alpha.shape, bool)
     edge[:-1] |= pieces[:-1] != pieces[1:]
@@ -594,6 +638,19 @@ def snap_owners(owners, outline, pixels, alpha, part_count, colors=16):
     whole = sizes == np.bincount(cells[enclosed], minlength=cells.max() + 1)[cell_of]
     solid = ((sizes >= max(24, 2e-4 * enclosed.sum())) & (depth >= 2.5)) | (whole & (sizes > 0))
     solid[0] = False
+    return pieces, count, enclosed, solid
+
+
+def snap_owners(owners, outline, pixels, alpha, part_count, colors=16):
+    """A model's part polygon is coarse (often a box) and cuts straight through a shape: coloring part by part then
+    paints a rectangle of a continuous area at a time. So each piece of one color inside an area the ink encloses goes
+    wholly to the part that owns most of it, and every other pixel (anti-aliasing, the paint under a line) follows the
+    nearest piece. This is the paint order only: strokes are still classified by the polygon owners."""
+    pieces, count, enclosed, solid = color_pieces(outline, pixels, alpha, colors)
+    if not count:
+        return owners
+    inside = (pieces > 0) & (owners >= 0)
+    tally = np.bincount(pieces[inside] * part_count + owners[inside], minlength=(count + 1) * part_count).reshape(count + 1, part_count)
     snapped = owners.copy()
     keep = solid[pieces]
     snapped[keep] = tally.argmax(1)[pieces[keep]]

@@ -64,6 +64,19 @@ def lift_seconds(distance, fps=30, scale=1., lapse=1., size=1.):
                1.875 * distance / (.75 * TRAVEL_PX * size * fps))
 
 
+PLAN_LONG_SIDE = 720   # strokes and timing are planned at most this large; a bigger picture is re-rendered sharp from the plan
+
+
+def plan_box(width, height, drawing=None):
+    """(plan width, plan height, render factor). A picture laid out larger than the plan side keeps the strokes and the
+    drawing time of its planned size: more pixels do not mean more lines to draw, only sharper ones."""
+    side = float((drawing or {}).get('plan_side', PLAN_LONG_SIDE))
+    if not 360 <= side <= 1600:
+        raise ValueError('drawing.plan_side must be within 360..1600')
+    factor = min(1., side / max(width, height))
+    return max(8, round(width * factor)), max(8, round(height * factor)), 1. / factor
+
+
 def picture_size(width, height):
     """How much larger than the calibration size a picture is drawn. Timing follows the picture, not the screen:
     a picture twice as large is not twice the work, so speeds and per-frame caps scale with it (bounded)."""

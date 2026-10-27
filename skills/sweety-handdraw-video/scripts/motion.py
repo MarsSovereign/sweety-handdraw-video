@@ -102,6 +102,7 @@ CAMERA_MOVES = {
     'whip': {'seconds': .28, 'ease': 'inout_quart'},
     'snap': {'seconds': .3, 'ease': 'out_expo'},
     'slam': {'seconds': .18, 'ease': 'out_back', 'impact': 10.},
+    'dolly_zoom': {'seconds': 2.4, 'ease': 'inout_sine'},  # needs a subject: it keeps its size while the page zooms past it
 }
 IMPACT_DECAY = .14   # seconds for an arrival shake to fall to 1/e
 

@@ -10,6 +10,8 @@ def resolve_audio_layers(root, manifest):
     music = options.get('music', None)
     from foley import parse_options
     parse_options(options.get('foley'))  # fail early on a bad audio.foley; the layer itself needs the finished timeline
+    from sfx import parse_options as parse_sfx
+    parse_sfx(options.get('sfx'))
     layers = []
     if music not in (None, False):
         if not isinstance(music, dict) or not music.get('user_instruction'):

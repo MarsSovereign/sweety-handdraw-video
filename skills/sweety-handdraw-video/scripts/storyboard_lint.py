@@ -13,6 +13,8 @@ from composition import measure_pages, validate_boards, validate_composition, va
 
 COVER = 1.0  # video time = narration time + the fixed one-second cover
 PICTURES = ('illustration', 'diagram')
+DIAGRAM_RECIPES = {'rough_chart', 'map_route', 'morph', 'sketch_shapes', 'progress_ring', 'rough_annotate', 'physics', 'spin3d', 'formula'}
+TEXT_RECIPES = {'kinetic_title', 'number_ticker', 'callout', 'formula'}
 KINDS = PICTURES + ('text_group',)
 LEAD, HOLD, GAP = .54, .6, .08
 # The minimum structure that makes a declared shot type true; the director still judges the content.
@@ -203,6 +205,10 @@ def page_actions(manifest):
             covered = group_beats(ids, group)
             for action in group['actions']:
                 yield page_index, covered[covered.index(anchor_beat(covered, ids, action)):], action
+        # A web motion layer tagged with a planned visual is that visual (a chart, a map, a title...): it plays on its page.
+        for overlay in page.get('overlays', []):
+            if overlay.get('visual'):
+                yield page_index, ids, {'type': 'overlay', 'recipe': overlay.get('recipe'), 'visual': overlay['visual']}
 
 
 def anchor_beat(covered, beat_ids, action):
@@ -235,9 +241,13 @@ def usage(root, manifest, board):
         placed.setdefault(identity, []).append(action)
     for identity, (shot, visual) in visuals.items():
         types = [action['type'] for action in placed.get(identity, [])]
-        # A counting number is a text label; a chart, or a pen line/arrow with something else, is a diagram.
-        need = {'illustration': 'illustration' in types, 'text_group': bool({'text', 'counter'} & set(types)),
-                'diagram': 'bar_chart' in types or (bool({'marker', 'line', 'arrow'} & set(types)) and len(types) >= 2)}.get(visual.get('kind'), True)
+        recipes = {action.get('recipe') for action in placed.get(identity, []) if action['type'] == 'overlay'}
+        # A counting number is a text label; a chart, or a pen line/arrow with something else, is a diagram; so are
+        # motion layers that chart, map, morph, sketch, simulate, turn in 3D or write a formula, and titles/tickers/callouts/formulas are text.
+        need = {'illustration': 'illustration' in types,
+                'text_group': bool({'text', 'counter'} & set(types)) or bool(TEXT_RECIPES & recipes),
+                'diagram': 'bar_chart' in types or (bool({'marker', 'line', 'arrow'} & set(types)) and len(types) >= 2)
+                           or bool(DIAGRAM_RECIPES & recipes)}.get(visual.get('kind'), True)
         if not need:
             errors.append(f'{shot.get("id")}/{identity}: planned {visual.get("kind")} "{visual.get("subject")}" is missing from job.json '
                           '(diagram = marker + another action); planned visuals cannot be skipped')
@@ -272,6 +282,8 @@ def timing(board, timeline):
     beats = [beat for page in timeline['pages'] for beat in page['beats']]
     points = []
     for page in timeline['pages']:
+        # A planned motion layer appearing is something new on screen too.
+        points += [overlay['start'] for overlay in page.get('overlays', []) if overlay.get('visual') in visuals]
         for event in page['events']:
             if event['caption']:
                 continue

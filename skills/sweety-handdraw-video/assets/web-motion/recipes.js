@@ -1,7 +1,8 @@
 // Motion recipes for web overlay layers. Each recipe builds its DOM inside `root` (a transparent box the size of
 // the overlay) and starts its animations at virtual time 0; the capture then steps the clock frame by frame.
 // Libraries: anime.js (MIT), rough.js (MIT), rough-notation (MIT), canvas-confetti (ISC), d3-geo + d3-array (ISC), topojson-client (ISC),
-// world-atlas land outlines (ISC; Natural Earth, public domain) — see vendor/*.LICENSE and THIRD_PARTY_NOTICES.md.
+// world-atlas land outlines (ISC; Natural Earth, public domain); for their recipes only, matter-js (MIT), Zdog (MIT) and
+// MathJax (Apache-2.0) — see vendor/*.LICENSE and THIRD_PARTY_NOTICES.md.
 (() => {
   const { animate, stagger, createSpring, svg, createTimeline } = anime;
   const NS = 'http://www.w3.org/2000/svg';
@@ -49,7 +50,7 @@
     const box = document.createElement('div');
     Object.assign(box.style, { position: 'absolute', inset: '0', display: 'flex', flexWrap: 'wrap', alignContent: 'center',
       justifyContent: p.align === 'left' ? 'flex-start' : 'center', gap: `0 ${0.18 * (p.size || 96)}px`,
-      fontFamily: family(p.font), fontSize: `${p.size || 96}px`, fontWeight: p.weight || 700, color: p.color || '#1E2733',
+      fontFamily: family(p.font || 'hand'), fontSize: `${p.size || 96}px`, fontWeight: p.weight || 700, color: p.color || '#1E2733',
       lineHeight: 1.15, letterSpacing: p.tracking || '0' });
     root.appendChild(box);
     const style = p.style || 'blur_up';
@@ -262,7 +263,7 @@
     const text = `${p.prefix || ''}${value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${p.suffix || ''}`;
     const row = document.createElement('div');
     Object.assign(row.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center',
-      justifyContent: p.align === 'left' ? 'flex-start' : 'center', fontFamily: family(p.font || 'sans'), fontSize: `${p.size || 120}px`,
+      justifyContent: p.align === 'left' ? 'flex-start' : 'center', fontFamily: family(p.font || 'hand'), fontSize: `${p.size || 120}px`,
       fontWeight: p.weight || 800, color: p.color || '#1E2733', fontVariantNumeric: 'tabular-nums', lineHeight: 1 });
     root.appendChild(row);
     const columns = [];
@@ -306,26 +307,24 @@
     animate(root, { scale: [0.3, 1], opacity: [0, 1], rotate: [p.tilt ?? -6, 0], delay: p.delay || 0, ease: spring(220, 13) });
   };
 
-  // A ring that fills to a percentage while its number counts up.
+  // A hand-drawn ring that is inked to a percentage while its number counts up (rough.js, drawn on like a pen stroke).
   Recipes.progress_ring = (root, p, ctx) => {
-    const layer = svgLayer(root, ctx.width, ctx.height);
-    const size = Math.min(ctx.width, ctx.height), r = size * 0.4, cx = ctx.width / 2, cy = ctx.height / 2;
-    const track = document.createElementNS(NS, 'circle');
-    Object.assign(track, {}); track.setAttribute('cx', cx); track.setAttribute('cy', cy); track.setAttribute('r', r);
-    track.setAttribute('fill', 'none'); track.setAttribute('stroke', p.track || '#E6E0D2'); track.setAttribute('stroke-width', size * 0.08);
-    const arc = track.cloneNode(); arc.setAttribute('stroke', p.color || '#E9784E'); arc.setAttribute('stroke-linecap', 'round');
-    arc.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
-    layer.appendChild(track); layer.appendChild(arc);
-    const length = 2 * Math.PI * r, share = Math.max(0, Math.min(1, (p.value || 0) / (p.max || 100)));
-    arc.style.strokeDasharray = `${length}`;
-    arc.animate([{ strokeDashoffset: length }, { strokeDashoffset: length * (1 - share) }], { delay: p.delay || 0, duration: p.duration_ms || 1200,
-      easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' });
+    const layer = svgLayer(root, ctx.width, ctx.height), pen = rough.svg(layer);
+    const size = Math.min(ctx.width, ctx.height), r = size * 0.36, cx = ctx.width / 2, cy = ctx.height / 2;
+    const share = Math.max(0, Math.min(1, (p.value || 0) / (p.max || 100)));
+    const track = pen.circle(cx, cy, 2 * r, { stroke: p.track || '#D8D2C4', strokeWidth: size * 0.05, roughness: 1.1, seed: p.seed || 4 });
+    layer.appendChild(track);
+    const start = -Math.PI / 2, end = start + 2 * Math.PI * Math.max(0.001, share);
+    const arc = pen.arc(cx, cy, 2 * r, 2 * r, start, end, false, { stroke: p.color || '#E9784E', strokeWidth: size * 0.075, roughness: 1.3, seed: (p.seed || 4) + 1 });
+    layer.appendChild(arc);
+    drawOn(track, p.delay || 0, 260);
+    drawOn(arc, (p.delay || 0) + 200, p.duration_ms || 1100);
     const label = document.createElement('div');
     Object.assign(label.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontFamily: family(p.font || 'sans'), fontWeight: 800, fontSize: `${size * 0.22}px`, color: p.text_color || '#1E2733' });
+      fontFamily: family(p.font || 'hand'), fontWeight: 700, fontSize: `${size * 0.22}px`, color: p.text_color || '#1E2733' });
     root.appendChild(label);
     const counter = { v: 0 };
-    animate(counter, { v: p.value || 0, delay: p.delay || 0, duration: p.duration_ms || 1200, ease: 'outCubic',
+    animate(counter, { v: p.value || 0, delay: (p.delay || 0) + 200, duration: p.duration_ms || 1100, ease: 'outCubic',
       onUpdate: () => { label.textContent = `${counter.v.toFixed(p.decimals || 0)}${p.suffix ?? '%'}`; } });
   };
 
@@ -492,7 +491,9 @@
       const x0 = (W - cell * columns) / 2 + cell / 2, y0 = (H - cell * rows) / 2 + cell / 2;
       for (let i = 0; i < total; i++) {
         const x = x0 + (i % columns) * cell, y = y0 + Math.floor(i / columns) * cell, on = i < marked;
-        const dot = pen.circle(x, y, 2 * r, o({ strokeWidth: 2, fill: on ? colors[0] : '#D8D2C4', fillStyle: 'solid', stroke: on ? colors[0] : '#B9B1A1' }));
+        const dot = pen.circle(x, y, 2 * r, o({ strokeWidth: 2, fill: on ? colors[0] : '#D8D2C4', fillStyle: on ? 'cross-hatch' : 'solid',
+                                                 hachureGap: Math.max(2.5, r * 0.45), fillWeight: Math.max(1, r * 0.18), roughness: 1.4,
+                                                 stroke: on ? colors[0] : '#B9B1A1', seed: (p.seed || 9) + i }));
         dot.style.transformBox = 'fill-box'; dot.style.transformOrigin = 'center'; layer.appendChild(dot);
         const at = start + (on ? 400 + i * (p.stagger || 25) : i * 4);
         dot.animate([{ transform: 'scale(0)' }, { transform: 'scale(1)' }], { delay: at, duration: 300, easing: 'cubic-bezier(.3,1.6,.5,1)', fill: 'both' });
@@ -600,6 +601,266 @@
       requestAnimationFrame(draw);
     };
     requestAnimationFrame(draw);
+  };
+
+  // ---------------------------------------------------------------- 2.0.1 recipes
+
+  // Props under real physics (matter-js): coins pour into a jar, dominoes topple, a tower is knocked over, balls bounce
+  // and settle. Each body keeps one rough.js outline (a fixed seed) and turns rigidly with the body instead of boiling.
+  // p: {scene: pour|topple|stack|bounce, container: jar|tray|floor|none, items: [{shape: circle|box|pill, size | w,h,
+  //     fill, label, count}], gravity (1 = 1000 px/s^2), bounce (0..1), drop_ms, intro_ms, delay, ink, label_size}
+  Recipes.physics = (root, p, ctx) => {
+    if (!window.Matter) throw new Error('physics needs matter-js (vendor/matter.js)');
+    const { Engine, Bodies, Body, Composite } = Matter;
+    const W = ctx.width, H = ctx.height, scale = ctx.scale, M = 8;  // bodies stay M px inside the box
+    const canvas = document.createElement('canvas');
+    canvas.width = W * scale; canvas.height = H * scale;
+    Object.assign(canvas.style, { position: 'absolute', inset: '0', width: `${W}px`, height: `${H}px` });
+    root.appendChild(canvas);
+    const g = canvas.getContext('2d'); g.scale(scale, scale);
+    const rc = rough.canvas(canvas), gen = rc.generator;
+    // Toppling reads best faster than the free fall of a small prop (2.5x), so dominoes run as a chain, not a slow lean.
+    const engine = Engine.create({ gravity: { x: 0, y: p.gravity ?? (p.scene === 'topple' ? 2.5 : 1), scale: 0.001 } });
+    engine.positionIterations = 10; engine.velocityIterations = 8;
+    const scene = p.scene || 'pour', kind = p.container || (scene === 'pour' ? 'jar' : 'floor');
+    const start = p.delay || 0, intro = p.intro_ms ?? (kind === 'none' ? 0 : 500), lineInk = ink(p);
+    const wall = (x, y, w, h, angle = 0) => Bodies.rectangle(x, y, w, h, { isStatic: true, angle, friction: 0.6 });
+    // Invisible bounds a little inside the box, so nothing settles against (and gets cut by) the overlay edge.
+    const statics = [wall(W / 2, H - M + 30, W * 2, 60), wall(M - 30, H / 2, 60, H * 3), wall(W - M + 30, H / 2, 60, H * 3)];
+    let outlinePath = null, floorY = H - M;
+    if (kind === 'jar' || kind === 'tray') {
+      const jw = Math.min(W - 2 * M - 8, kind === 'jar' ? Math.max(W * 0.55, 160) : W * 0.8), jh = kind === 'jar' ? Math.min(H * 0.62, jw * 1.25) : Math.min(H * 0.22, 90);
+      const left = (W - jw) / 2, right = left + jw, bottom = H - M - 4, top = bottom - jh, t = 16, r = Math.min(26, jw * 0.12);
+      statics.push(wall(left - t / 2 + 2, bottom - jh / 2, t, jh), wall(right + t / 2 - 2, bottom - jh / 2, t, jh), wall(W / 2, bottom + t / 2 - 2, jw, t));
+      outlinePath = `M ${left - 6} ${top} Q ${left} ${top + 6} ${left} ${top + 18} L ${left} ${bottom - r} Q ${left} ${bottom} ${left + r} ${bottom} L ${right - r} ${bottom} Q ${right} ${bottom} ${right} ${bottom - r} L ${right} ${top + 18} Q ${right} ${top + 6} ${right + 6} ${top}`;
+      floorY = bottom;
+      statics.opening = [left + 10, right - 10];
+    } else if (kind === 'floor') {
+      outlinePath = `M ${M + 4} ${H - M - 2} L ${W - M - 4} ${H - M - 2}`;
+      floorY = H - M - 4;
+      statics[0] = wall(W / 2, floorY + 30, W * 2, 60);
+    }
+    Composite.add(engine.world, statics);
+    const outline = outlinePath && gen.path(outlinePath, { stroke: lineInk, strokeWidth: 3.2, roughness: 1.1, seed: 7 });
+    const items = [];
+    const specs = (p.items && p.items.length ? p.items : [{ shape: 'circle', fill: '#F2C14E', label: '¥', count: 14 }]);
+    for (const spec of specs) for (let i = 0; i < (spec.count || 1); i++) items.push({ ...spec });
+    const size = (spec) => spec.size || Math.max(22, Math.min(W, H) * 0.085);
+    const FILLS = PALETTE.filter((color) => color !== '#1E2733');  // no ink-dark bodies: they read as holes
+    const make = (spec, x, y, angle = 0) => {
+      const options = { restitution: spec.bounce ?? p.bounce ?? (scene === 'bounce' ? 0.62 : 0.2), friction: spec.friction ?? 0.4, frictionAir: 0.004,
+                        density: spec.density || 0.002, angle };
+      const s = size(spec), w = spec.w || s, h = spec.h || s;
+      if ((spec.shape || 'circle') === 'circle') return Bodies.circle(x, y, s / 2, options);
+      if (spec.shape === 'pill') return Bodies.rectangle(x, y, w * 1.6, h * 0.7, { ...options, chamfer: { radius: h * 0.34 } });
+      return Bodies.rectangle(x, y, w, h, { ...options, chamfer: { radius: Math.min(w, h) * 0.08 } });
+    };
+    const drawable = (spec, index) => {
+      const s = size(spec), w = spec.w || s, h = spec.h || s, fill = spec.fill || FILLS[index % FILLS.length];
+      const style = { stroke: lineInk, strokeWidth: 2.4, roughness: 0.9, fill, fillStyle: 'solid', seed: 11 + index };
+      if ((spec.shape || 'circle') === 'circle') return gen.circle(0, 0, s, style);
+      if (spec.shape === 'pill') return gen.path(`M ${-w * 0.8 + h * 0.35} ${-h * 0.35} H ${w * 0.8 - h * 0.35} A ${h * 0.35} ${h * 0.35} 0 0 1 ${w * 0.8 - h * 0.35} ${h * 0.35} H ${-w * 0.8 + h * 0.35} A ${h * 0.35} ${h * 0.35} 0 0 1 ${-w * 0.8 + h * 0.35} ${-h * 0.35} Z`, style);
+      return gen.rectangle(-w / 2, -h / 2, w, h, style);
+    };
+    const bodies = [];  // {body, shape, spec, at}
+    const release = (spec, index, at, x, y, angle = 0, kick = null) => bodies.push({ spec, shape: drawable(spec, index), at, x, y, angle, kick, body: null });
+    const dropMs = p.drop_ms ?? 1400;
+    const [lo, hi] = statics.opening || [M + 20, W - M - 20];
+    if (scene === 'topple' || scene === 'stack') {
+      const s = size(items[0]);
+      if (scene === 'topple') {
+        // Dominoes a little over half their height apart: each one falls far enough to tip the next.
+        const n = Math.max(3, items.length), h = Math.min(s * 2.4, (floorY - M) * 0.8), w = Math.max(8, h * 0.17), gap = Math.min(h * 0.58, (W - 2 * M - 2 * w) / n);
+        const x0 = W / 2 - gap * (n - 1) / 2;
+        for (let i = 0; i < n; i++) release({ ...items[i % items.length], shape: 'box', w, h, friction: 0.08 }, i, 0, x0 + i * gap, floorY - h / 2 - 1, 0, i === 0 ? { angular: 0.05 } : null);
+      } else {
+        // A two-wide tower and a heavy ball that rolls in and knocks it over.
+        const rows = Math.max(3, Math.ceil(items.length / 2)), w = s * 1.1, h = Math.min(s * 0.8, (floorY - M - 20) / rows);
+        let index = 0;
+        for (let r = 0; r < rows; r++) for (let c = 0; c < 2; c++) release({ ...items[index % items.length], shape: 'box', w, h }, index++, 0,
+          W * 0.62 + (c - 0.5) * (w + 1) + (r % 2 ? 3 : -3), floorY - h / 2 - r * (h + 0.5) - 1);
+        release({ shape: 'circle', size: s * 1.2, fill: '#E9784E', density: 0.02, bounce: 0.1 }, index, intro + 150, M + s * 0.7, floorY - rows * h * 0.62, 0, { vx: 22 });
+      }
+    } else {
+      items.forEach((spec, i) => {
+        const x = lo + (hi - lo) * (scene === 'bounce' ? (i + 0.5) / items.length : (0.5 + 0.42 * Math.sin(i * 2.399)));
+        release(spec, i, intro + dropMs * i / Math.max(1, items.length), x, -size(spec) - 4 - (scene === 'bounce' ? i * 18 : 0), Math.random() * 6.28);
+      });
+    }
+    const step = 1000 / 120;
+    let sim = 0;
+    const draw = () => {
+      const now = performance.now() - start;
+      for (; sim + step <= now; sim += step) {
+        for (const entry of bodies) {
+          if (entry.body || sim < entry.at) continue;
+          entry.body = make(entry.spec, entry.x, entry.y, entry.angle);
+          Composite.add(engine.world, entry.body);
+          if (entry.kick && entry.kick.angular) Body.setAngularVelocity(entry.body, entry.kick.angular);
+          if (entry.kick && entry.kick.vx) Body.setVelocity(entry.body, { x: entry.kick.vx, y: -2 });
+        }
+        if (sim >= Math.min(...bodies.map((entry) => entry.at), intro)) Engine.update(engine, step);
+      }
+      g.clearRect(0, 0, W, H);
+      if (outline) {
+        // The container is drawn on first: its path revealed with a moving clip from left to right.
+        const f = intro ? ease(Math.min(1, now / intro)) : 1;
+        g.save(); g.beginPath(); g.rect(0, 0, W * f, H); g.clip(); rc.draw(outline); g.restore();
+      }
+      const font = family(p.font || 'hand');
+      for (const entry of bodies) {
+        const shown = entry.body || (scene !== 'pour' && scene !== 'bounce');
+        if (!shown) continue;
+        const x = entry.body ? entry.body.position.x : entry.x, y = entry.body ? entry.body.position.y : entry.y, a = entry.body ? entry.body.angle : entry.angle;
+        g.save(); g.translate(x, y); g.rotate(a);
+        if (!entry.body && intro) g.globalAlpha = ease(Math.min(1, now / intro));
+        rc.draw(entry.shape);
+        if (entry.spec.label) {
+          const s = size(entry.spec);
+          g.fillStyle = lineInk; g.font = `${Math.round(p.label_size || s * 0.55)}px ${font}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.fillText(entry.spec.label, 0, s * 0.03);
+        }
+        g.restore();
+      }
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  };
+
+  // A 3D object turning in place (Zdog): flat-shaded faces inside an ink silhouette, popping in with a small overshoot.
+  // p: {shape: box|coin|cylinder|cone|sphere|pyramid|gem, size, colors: [main, side, top], turns (1), spin_ms, tilt (deg),
+  //     axis: y|x, appear_ms, delay, ink, outline (px)}
+  Recipes.spin3d = (root, p, ctx) => {
+    if (!window.Zdog) throw new Error('spin3d needs Zdog (vendor/zdog.js)');
+    const W = ctx.width, H = ctx.height, scale = ctx.scale, TAU = Zdog.TAU;
+    const shape = p.shape || 'box', s = p.size || Math.min(W, H) * 0.5, line = p.outline ?? 4, inkColor = ink(p);
+    const colors = p.colors || [PALETTE[0], '#C8603A', '#F4A47F'];
+    const [main, side, top] = [colors[0], colors[1] || colors[0], colors[2] || colors[0]];
+    // Two canvases, one model each: an ink silhouette below (every surface in ink, strokes thickened by the outline) and
+    // the colours above (Zdog clears its canvas on every render, so the passes cannot share one).
+    const build = (silhouette) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = W * scale; canvas.height = H * scale;
+      Object.assign(canvas.style, { position: 'absolute', inset: '0', width: `${W}px`, height: `${H}px` });
+      root.appendChild(canvas);
+      const pen = (color) => (silhouette ? inkColor : color), grow = silhouette ? 2 * line : 0;
+      const scene = new Zdog.Illustration({ element: canvas, zoom: scale, resize: false, centered: true });
+      const body = new Zdog.Anchor({ addTo: scene });
+      const face = (points, color, front) => new Zdog.Shape({ addTo: body, path: points, fill: true, stroke: 2 + grow, color: pen(color), front, backface: silhouette ? pen(color) : false });
+      if (shape === 'box') {
+        new Zdog.Box({ addTo: body, width: s * 0.78, height: s * 0.78, depth: s * 0.78, stroke: 2 + grow, color: pen(main),
+          leftFace: pen(side), rightFace: pen(side), topFace: pen(top), bottomFace: pen(side), frontFace: pen(main), rearFace: pen(main) });
+      } else if (shape === 'coin' || shape === 'cylinder') {
+        const coin = shape === 'coin', d = coin ? s * 0.92 : s * 0.62, length = coin ? s * 0.12 : s * 0.85;
+        new Zdog.Cylinder({ addTo: body, diameter: d, length, stroke: 2 + grow, color: pen(side), frontFace: pen(main), backface: pen(main),
+          rotate: coin ? {} : { x: TAU / 4 } });
+        if (coin && !silhouette) for (const z of [1, -1]) new Zdog.Ellipse({ addTo: body, diameter: d * 0.7, stroke: Math.max(2, s * 0.025), color: top, translate: { z: z * (length / 2 + 0.5) } });
+        // A can's label stripe shows that it turns (a plain cylinder spinning on its axis looks still).
+        if (!coin && !silhouette) new Zdog.Rect({ addTo: body, width: d * 0.28, height: length * 0.86, stroke: 1, fill: true, color: top, backface: false,
+                                                   translate: { z: d / 2 + 1 } });
+      } else if (shape === 'cone') {
+        new Zdog.Cone({ addTo: body, diameter: s * 0.8, length: s * 0.9, stroke: 2 + grow, color: pen(main), backface: pen(side), rotate: { x: TAU / 4 }, translate: { y: s * 0.38 } });
+        if (!silhouette) new Zdog.Shape({ addTo: body, path: [{ y: -s * 0.5 }, { y: s * 0.38, z: s * 0.4 }], stroke: Math.max(4, s * 0.05), color: top });  // a seam that turns
+      } else if (shape === 'sphere') {
+        const half = (color, turn) => new Zdog.Hemisphere({ addTo: body, diameter: s * 0.9, stroke: 2 + grow, color: pen(color), backface: pen(color), rotate: { y: turn } });
+        half(main, 0); half(top, TAU / 2);
+      } else if (shape === 'pyramid' || shape === 'gem') {
+        const r = s * 0.48, apex = { x: 0, y: -s * 0.5, z: 0 }, tip = shape === 'gem' ? { x: 0, y: s * 0.62, z: 0 } : null;
+        const base = [0, 1, 2, 3].map((i) => ({ x: r * Math.cos(TAU * i / 4 + TAU / 8), y: s * 0.3, z: r * Math.sin(TAU * i / 4 + TAU / 8) }));
+        const corners = [apex, ...base, ...(tip ? [tip] : [])];
+        const center = ['x', 'y', 'z'].reduce((c, k) => ({ ...c, [k]: corners.reduce((sum, q) => sum + q[k], 0) / corners.length }), {});
+        // Zdog hides a face when its "front" point (relative to the face origin) turns away: give it the true outward normal.
+        const normal = (points) => {
+          const [a, b, c] = points, u = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }, v = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+          const n = { x: u.y * v.z - u.z * v.y, y: u.z * v.x - u.x * v.z, z: u.x * v.y - u.y * v.x };
+          const out = ['x', 'y', 'z'].reduce((sum, k) => sum + n[k] * (points.reduce((t, q) => t + q[k], 0) / points.length - center[k]), 0);
+          return out < 0 ? { x: -n.x, y: -n.y, z: -n.z } : n;
+        };
+        const palette = [main, side, top, side];
+        base.forEach((a, i) => {
+          const b = base[(i + 1) % 4];
+          face([apex, a, b], palette[i], normal([apex, a, b]));
+          if (tip) face([tip, b, a], palette[(i + 1) % 4], normal([tip, b, a]));
+        });
+        if (!tip) face(base, side, normal(base));
+      } else throw new Error('spin3d shape is box, coin, cylinder, cone, sphere, pyramid or gem');
+      return { scene, body };
+    };
+    const passes = [build(true), build(false)];
+    const start = p.delay || 0, appear = p.appear_ms ?? 420, spin = p.spin_ms || Math.max(600, ctx.duration - start - appear - 200);
+    const tilt = (p.tilt ?? 18) * TAU / 360, turns = p.turns ?? 1, axis = p.axis || 'y';
+    const draw = () => {
+      const now = performance.now() - start;
+      const grow = now <= 0 ? 0 : now >= appear ? 1 : 1 - Math.cos(now / appear * Math.PI * 1.25) * Math.exp(-4 * now / appear);  // overshoot, then settle
+      const turn = TAU * turns * ease(Math.max(0, Math.min(1, (now - appear) / spin))) + TAU / 10;
+      passes.forEach(({ scene, body }) => {
+        body.scale = Math.max(0.0001, grow);
+        body.rotate = axis === 'x' ? { x: turn, y: TAU / 10 } : { x: -tilt, y: turn };
+        scene.updateRenderGraph();
+      });
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  };
+
+  // A formula written by hand (MathJax TeX -> SVG glyph outlines): glyph by glyph in reading order, each outline traced
+  // like a pen, then filled; fraction bars and root lines are ruled left to right. A highlight circles or underlines a
+  // part afterwards. p: {tex, size (px per em; default fits the box), color, glyph_ms, delay, align: center|left,
+  //     highlight: {from, to (glyph indexes), style: circle|box|underline, color, at_ms}}
+  Recipes.formula = (root, p, ctx) => {
+    if (!window.MathJax || !MathJax.tex2svg) throw new Error('formula needs MathJax (vendor/mathjax-tex-svg.js)');
+    if (!p.tex) throw new Error('formula needs "tex"');
+    const W = ctx.width, H = ctx.height;
+    const holder = MathJax.tex2svg(p.tex, { display: true });
+    const svgNode = holder.querySelector('svg');
+    if (!svgNode) throw new Error('MathJax produced no SVG for ' + p.tex);
+    const error = svgNode.querySelector('[data-mml-node="merror"]');
+    if (error) throw new Error('TeX error in formula: ' + (error.getAttribute('title') || error.textContent));
+    const box = svgNode.viewBox.baseVal, pad = Math.min(W, H) * 0.06;
+    const em = p.size || Math.min((W - 2 * pad) / (box.width / 1000), (H - 2 * pad) / (box.height / 1000), Math.max(40, H * 0.5));
+    const width = box.width / 1000 * em, height = box.height / 1000 * em;
+    svgNode.setAttribute('width', width); svgNode.setAttribute('height', height);
+    Object.assign(svgNode.style, { position: 'absolute', top: `${(H - height) / 2}px`, left: `${p.align === 'left' ? pad : (W - width) / 2}px`,
+                                   color: p.color || ink(p), overflow: 'visible' });
+    root.appendChild(svgNode);
+    // Reading order as a hand writes it: a fraction's bar before its denominator, a root's sign and bar before its contents.
+    for (const frac of svgNode.querySelectorAll('[data-mml-node="mfrac"]')) {
+      const bar = [...frac.children].find((child) => child.tagName === 'rect');
+      if (bar && frac.children.length > 2) frac.insertBefore(bar, frac.children[1]);
+    }
+    for (const root2 of svgNode.querySelectorAll('[data-mml-node="msqrt"], [data-mml-node="mroot"]')) {
+      for (const child of [...root2.children].filter((c) => c.tagName === 'rect' || c.getAttribute('data-mml-node') === 'mo').reverse()) root2.insertBefore(child, root2.firstChild);
+    }
+    const marks = [...svgNode.querySelectorAll('path, rect')].filter((node) => !(node.tagName === 'rect' && node.closest('[data-mml-node="merror"]')));
+    const start = p.delay || 0, slot = p.glyph_ms || Math.max(90, Math.min(240, (ctx.duration - start - 500) / Math.max(1, marks.length)));
+    const color = p.color || ink(p);
+    marks.forEach((node, index) => {
+      const at = start + index * slot;
+      if (node.tagName === 'rect') {
+        node.animate([{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)' }], { delay: at, duration: slot * 1.2, easing: 'cubic-bezier(.45,.05,.4,1)', fill: 'both' });
+        return;
+      }
+      const length = node.getTotalLength();
+      Object.assign(node.style, { stroke: 'currentColor', strokeWidth: `${p.pen ?? 1.4}px`, vectorEffect: 'non-scaling-stroke', strokeLinejoin: 'round', strokeDasharray: `${length}` });
+      node.animate([{ strokeDashoffset: length }, { strokeDashoffset: 0 }], { delay: at, duration: slot * 1.25, easing: 'cubic-bezier(.45,.05,.4,1)', fill: 'both' });
+      node.animate([{ fillOpacity: 0 }, { fillOpacity: 1 }], { delay: at + slot * 0.75, duration: slot * 1.1, easing: 'ease-out', fill: 'both' });
+    });
+    const mark = p.highlight;
+    if (mark) {
+      const glyphs = marks.slice(mark.from ?? 0, (mark.to ?? marks.length - 1) + 1);
+      const origin = root.getBoundingClientRect();
+      const rects = glyphs.map((node) => node.getBoundingClientRect()).filter((r) => r.width || r.height);
+      if (!rects.length) throw new Error('formula highlight covers no glyphs');
+      const x1 = Math.min(...rects.map((r) => r.left)) - origin.left, y1 = Math.min(...rects.map((r) => r.top)) - origin.top;
+      const x2 = Math.max(...rects.map((r) => r.right)) - origin.left, y2 = Math.max(...rects.map((r) => r.bottom)) - origin.top;
+      const layer = svgLayer(root, W, H), rs = rough.svg(layer), m = em * 0.12, style = { stroke: mark.color || '#E9784E', strokeWidth: mark.width || 3.4, roughness: 1.3, seed: 5 };
+      const kind = mark.style || 'circle';
+      const node = kind === 'underline' ? rs.line(x1, y2 + m * 0.6, x2, y2 + m * 0.4, style)
+        : kind === 'box' ? rs.rectangle(x1 - m, y1 - m, x2 - x1 + 2 * m, y2 - y1 + 2 * m, style)
+        : rs.ellipse((x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1) * 1.18 + 2 * m, (y2 - y1) * 1.3 + 2 * m, style);
+      layer.appendChild(node);
+      drawOn(node, mark.at_ms ?? start + marks.length * slot + 250, mark.ms || 520);
+    }
   };
 
   // Anything else: the model writes the body and a script; it must animate with anime.js, CSS or element.animate

@@ -1,4 +1,4 @@
-# 运镜、转场与动效目录（2.0）
+# 运镜、转场与动效目录（2.0.1）
 
 镜头和转场决定成片的观感，模型应逐镜设计，不交给默认值。本目录是可用的"卡组"：每张卡写明做什么、默认参数、适合什么、不适合什么。没写的页面由自动导演兜底（见末节），模型写了的一律以模型为准。
 
@@ -6,7 +6,7 @@
 
 ## 一、镜头 `pages[].camera`
 
-关键帧数组：`{"at": 秒 或 "beat:<id>", "center": [x, y], "zoom": 1–3, "move": 名称, "seconds": 0–3, "ease": 缓动, "follow": 布尔, "rotate": -20–20, "shake": 0–20, "impact": 0–40, "hop": 0–0.6}`。
+关键帧数组：`{"at": 秒 或 "beat:<id>", "center": [x, y], "zoom": 1–3, "move": 名称, "seconds": 0–3, "ease": 缓动, "follow": 布尔, "rotate": -20–20, "shake": 0–20, "impact": 0–40, "hop": 0–0.6, "subject": 视觉 id}`。
 
 **基本规则**
 - `at` 从本页开始计时；`at: 0` 的关键帧是开页取景。
@@ -25,6 +25,7 @@
 | `whip` | 0.28 s，自动运动模糊 | 话题急转、对比的另一边 | 平静叙述；超过镜头数的 1/3 |
 | `snap` | 0.3 s, out_expo | 突然盯住一个细节 | 连续使用 |
 | `slam` | 0.18 s, out_back，到位震动 10 px | 金句、关键数字砸进画面，每段最多一次 | 普通强调 |
+| `dolly_zoom` | 2.4 s, inout_sine，需 `subject` | 希区柯克变焦：主体保持原大，背景冲过来（推近）或退远。"意识到了"、压迫感、命运转折，全片最多一次 | 普通讲解；`at: 0` |
 
 **附加字段**
 - `follow: true`：在该缩放内温和跟随笔尖，适合大图边画边看。
@@ -32,6 +33,13 @@
 - `hop`：途中拉远的比例，可以加在任何运镜上。
 - `shake`：持续手持漂移（几像素的慢速摆动）。
 - `rotate`：倾斜角度，只用于刻意的情绪镜头。
+- `subject`：dolly_zoom 的主体，写元素或动效层的 `visual` id。从这一帧开始，主体保持开始时的屏幕大小，下一个关键帧再缓回原大。`center` 一般对准主体。
+
+**视差 `depth`**（写在 `actions[]` 或 `space: board` 的动效层上，-1 到 1）
+- 0 或不写就是画板本身。负数是远景：镜头移动时它只跟着走一部分，画在本页墨线下面。正数是近景：比画板移动得更多，推近时向外散开。
+- 位置以本页开页取景为准：镜头不动时，元素就在版式写的位置。
+- 只在镜头真的移动时才看得出来，所以要配 `pan`、`drift`、`hop` 或 `dolly_zoom`。一页用两到三层就够：远景 -0.4 到 -0.7，主体 0，近景 0.4 到 0.8。
+- 笔尖会跟着它所画的那一层走。
 
 **密度门禁**（`build` 报警告，依据花叔《镜头语言》和 anidoodle 运镜语法）
 - 快速运镜（whip、snap、slam，以及时长不足 0.4 s 的移动）不超过全部运镜的 1/3。
@@ -77,15 +85,21 @@
 
 ## 四、网页动效层 `pages[].overlays`
 
-`{"recipe": …, "params": {…}, "x", "y", "width", "height", "at", "seconds", "space": "board|screen", "exit": {"style": "fade|shrink", "at", "seconds"}, "z", "seed", "bleed": false}`。
+`{"recipe": …, "params": {…}, "x", "y", "width", "height", "at", "seconds", "space": "board|screen", "exit": {"style": "fade|shrink", "at", "seconds"}, "z", "seed", "bleed": false, "visual": 视觉 id, "pen": true, "depth": 0}`。
 
 **运行方式**
 - 在无头 Chromium 里按虚拟时钟逐帧渲染，结果完全可复现，按内容哈希缓存。
 - `board` 层随镜头移动；`screen` 层不动，用于标题、下沿字。
 - 动画播完后停在最后一帧，直到退场或翻页。
 - 大字会自动缩小到放得进框；任何配方的最终帧碰到框边（内容被截断），`build` 都会报错。确实要出血到框外的内容写 `"bleed": true`。
+- **笔先动，画面才动**：`board` 层出现时，笔尖会描一下它：
+  - 圈注：绕一圈；下划线：划过去；图表和大字：从下沿扫过；公式：逐字跟着写；3D 物体：绕一圈轨道；倒入的道具：从入口点下去；其他：一个小圈。
+  - 笔尖悬在纸面上方，不出墨。笔正在画别的东西时不描。
+  - 不想要时写 `"pen": false`。
+- 写了 `visual` 的动效层算作故事板里的那个视觉（图表、地图、标题、公式……），`storyboard_lint` 会把它计入。
+- 声音：`burst` 带一声轻铃，slam 大字和镜头 `slam` 带一声闷响（见 `audio-and-ending.md` 的音效层）。
 - 需要先运行 `bash scripts/setup.sh --web-motion`。
-- 第三方库和许可见 `assets/web-motion/THIRD_PARTY_NOTICES.md`。
+- 第三方库和许可见 `assets/web-motion/THIRD_PARTY_NOTICES.md`。matter-js、Zdog、MathJax 只在用到 physics、spin3d、formula 时加载。
 
 | recipe | 关键参数 | 用途 |
 |---|---|---|
@@ -99,6 +113,9 @@
 | `morph` | shapes：[{shape：circle、dot、rect、card、star、heart、triangle、diamond、arrow 或自定 path，box，fill，stroke，text，hold_ms}] | "持续主角"：一个点变成卡片、再变成下一个概念。先沿路径拉伸，后半程才变形，颜色跟着过渡 |
 | `rough_chart` | kind 见下 | 手绘图表：先画坐标轴，再出数据，每张图只强调一件事（`highlight`）。数据必须真实 |
 | `map_route` | route：[[经度, 纬度], …]；stops：[{at, label}]；projection：globe（转动的地球，跟随标记）或 flat（fit 设为 route 或 world）；travel_ms | 路线、航线、海缆、迁徙。只画海岸线，不画国界 |
+| `physics` | scene：pour（倒入，默认）、topple（多米诺）、stack（球撞倒一摞方块）、bounce（弹跳）；container：jar、tray、floor、none；items：[{shape：circle、box、pill，size 或 w/h，fill，label，count}]；gravity；drop_ms | 真实物理（matter-js）："钱越攒越多"、"一个倒下全部倒下"、"一推就塌"。每个物体保持一份手绘轮廓，跟着刚体转动，不抖线 |
+| `spin3d` | shape：box、coin、cylinder、cone、sphere、pyramid、gem；colors：[主色, 侧面, 顶面]；turns；tilt；axis（y 或 x） | 转动的立体物件（Zdog），有墨线外轮廓和平涂明暗：硬币翻面、产品转一圈、晶体、积木。先带一点过冲弹出，再转 |
+| `formula` | tex（TeX）；size（每 em 像素，默认撑满框）；color；glyph_ms；highlight：{from, to（字形序号），style：circle、box、underline} | 手写公式（MathJax）：每个字形先描轮廓再填实，按书写顺序走，分数线先于分母，根号先于根式里的内容。写完可以圈出一部分。TeX 写错时 `build` 直接报错 |
 | `custom` | html、css、script（可用 anime、rough、RoughNotation、confetti、d3） | 以上都不够时由模型现写。动画必须由 anime.js、CSS 或 element.animate 驱动（都受虚拟时钟控制），背景保持透明 |
 
 `rough_chart` 的六种 kind：
@@ -145,3 +162,6 @@
 - **旅程或地理**：`map_route` 的地球随标记转动，配合站点口播；转场用 `zoom_through` 钻进某一站。
 - **章节切换**：`page_turn` 或 `erase` 二选一作为全片招牌，标题页配 `kinetic_title`。
 - **结尾回顾**：整块画板 `pull_out`，用 `rough_annotate` 圈出三处重点，最后一页 `iris`（blot）收束。
+- **有纵深的开场**：远景 `depth: -0.6`、主体 0、近景文字 `depth: 0.7`，画完后用 `drift` 横移，层次自己出来。情绪顶点用一次 `dolly_zoom` 盯住主体。
+- **公式推导**：`formula` 写出公式，口播讲到哪一项就 `highlight` 圈出哪一项；镜头 `push_in` 到公式，推导完 `pull_out`。
+- **积少成多或连锁反应**：`physics` 的 pour 或 topple 配一个真实数字（`number_ticker`），镜头静止，让物理自己演。

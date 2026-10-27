@@ -124,13 +124,16 @@ def probe(job, source, width, visual=None):
     action = matches[0]
     height = round(width * action['height'] / action['width'])
     resolve = lambda key: (job / action[key]) if action.get(key) else None
+    drawing = {**manifest.get('drawing', {}), **action.get('drawing', {})}
+    import line_drawing
+    plan_width, plan_height, _ = line_drawing.plan_box(width, height, drawing)   # what the build plans; display size is re-rendered
     with tempfile.TemporaryDirectory() as directory:
         stroke_assets.configure_assets(directory, '/dev/null', 0, int(manifest.get('canvas', {}).get('fps', 30)))
-        metadata = stroke_assets.build_illustration('probe', job / source, width, height, action.get('crop'), action.get('parts'), resolve('outline_mask'),
-                                                    region_map_path=resolve('region_map'), part_regions=action.get('part_regions'),
-                                                    lineart_exception=action.get('lineart_exception'), drawing={**manifest.get('drawing', {}), **action.get('drawing', {})})
+        metadata = stroke_assets.build_illustration('probe', job / source, plan_width, plan_height, action.get('crop'), action.get('parts'),
+                                                    resolve('outline_mask'), region_map_path=resolve('region_map'), part_regions=action.get('part_regions'),
+                                                    lineart_exception=action.get('lineart_exception'), drawing=drawing)
     drawability = metadata['drawability']
-    return {'source': source, 'size': [metadata['width'], metadata['height']], 'minimum_seconds': drawability['minimum_seconds'],
+    return {'source': source, 'size': [width, height], 'plan_size': [plan_width, plan_height], 'minimum_seconds': drawability['minimum_seconds'],
             'paced_seconds': round(metadata['seconds'], 2), 'strokes': drawability['stroke_count'], 'fill_regions': metadata['painting'].get('fill_regions'),
             'lineart_gate': drawability['lineart_gate']['passed'] if drawability.get('lineart_gate') else None}
 
